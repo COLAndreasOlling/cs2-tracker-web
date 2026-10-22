@@ -239,6 +239,9 @@ function render(d) {
   const score = d.score;
   const ringC = 2 * Math.PI * 52, ringFill = score == null ? 0 : (score / 100) * ringC;
 
+  const frs = d.matches.map(faceitRating), favg = (xs) => { const v = xs.filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const fr = { all: favg(frs), last10: favg(frs.filter((x) => x != null).slice(0, 10)), prev: favg(frs.filter((x) => x != null).slice(10)) };
+  if (!lt.available && state.formMetric === "rating") state.formMetric = "frating"; // no Leetify ratings to chart
   const integ = Analysis.integrity(d), coach = Analysis.mapCoaching(d), plan = Analysis.coachingPlan(d, coach), roleEst = Analysis.role(d);
   const integDot = integ.available ? { none: "--good", some: "--warn", high: "--bad", flag: "--bad" }[integ.level] : null;
   const tipCount = coach.available ? coach.maps.reduce((a, m) => a + m.tips.length, 0) : 0;
@@ -291,6 +294,7 @@ function render(d) {
     ${kpi("Headshot %", pct(o.hs), delta(f10.hs, prev.hs, 1))}
     ${kpi("Kills / round", fmt(o.kpr, 2), delta(f10.kpr, prev.kpr, 2))}
     ${kpi("Leetify rating", signed(o.rating, 2), delta(f10.rating, prev.rating, 2))}
+    ${kpi("FACEIT rating", fmt(fr.all, 2), delta(fr.last10, fr.prev, 2))}
     ${kpi("3K+ per match", fmt(o.mk3plus_per_match, 2), delta(f10.mk3plus_per_match, prev.mk3plus_per_match, 2))}
     ${kpi("Streak", d.streaks.current ? `${d.streaks.current}${d.streaks.current_type === "win" ? "W" : "L"}` : "–", `<span class="muted">best ${d.streaks.longest_win}W · worst ${d.streaks.longest_loss}L</span>`)}
   </div>
@@ -310,12 +314,12 @@ function render(d) {
 
   <div class="card" style="margin-bottom:16px">
     <div class="card-head"><div><h2>Match-by-match form</h2><div class="sub">Last ${Math.min(40, d.matches.length)} matches · bars vs. reference line · line = 5-match rolling average</div></div>
-      <div class="tabs" id="formTabs">${[["rating", "Leetify rating"], ["kd", "K/D"], ["adr", "ADR"], ["hs", "HS %"]].map(([k, l]) => `<button data-k="${k}" class="${state.formMetric === k ? "on" : ""}">${l}</button>`).join("")}</div></div>
+      <div class="tabs" id="formTabs">${[...(lt.available ? [["rating", "Leetify rating"]] : []), ["frating", "FACEIT rating"], ["kd", "K/D"], ["adr", "ADR"], ["hs", "HS %"]].map(([k, l]) => `<button data-k="${k}" class="${state.formMetric === k ? "on" : ""}">${l}</button>`).join("")}</div></div>
     <div class="chart" id="formChart"></div>
   </div>
 
   <div class="section-title">Skill profile (Leetify)</div>
-  ${lt.available ? skillSection(lt) : `<div class="card empty">Leetify data unavailable – ${esc(lt.reason)}</div>`}
+  ${lt.available ? skillSection(lt) : `<div class="card empty">No Leetify data (${esc(lt.reason)}), so aim mechanics – crosshair placement, reaction time, spray – aren't available.${fc.available ? " Utility, entry and clutch stats come from FACEIT instead: see the FACEIT section below and the Coaching tab." : ""}</div>`}
 
   <div class="section-title">FACEIT</div>
   ${fc.available ? faceitSection(fc) : `<div class="card empty">FACEIT data unavailable – ${esc(fc.reason)}</div>`}
@@ -412,6 +416,7 @@ function integritySection(r, d) {
         <span class="val">${esc(i.value)}</span>${i.matches?.length ? extremeMatches(i.matches, d) : ""}</li>`;
     }).join("")}</ul>
     ${r.context ? `<p class="muted" style="font-size:12px;margin:12px 0 0">${esc(r.context)}</p>` : ""}
+    ${r.missing ? `<p class="muted" style="font-size:12px;margin:8px 0 0">${esc(r.missing)}</p>` : ""}
   </div>`;
 }
 
@@ -419,13 +424,14 @@ function integritySection(r, d) {
 function extremeMatches(ms, d) {
   const cell = (v, extreme, f) => (v == null ? "–" : extreme ? `<b class="down" title="Extreme value">▲ ${f(v)}</b>` : f(v));
   return `<div class="table-wrap" style="grid-column:1/-1;margin-top:6px"><table>
-    <thead><tr><th>Date</th><th>Platform</th><th>Map</th><th>Result</th><th class="n">K / D</th><th class="n">Preaim</th><th class="n">Reaction</th><th class="n">Leetify rating</th><th>Matchroom</th></tr></thead><tbody>
+    <thead><tr><th>Date</th><th>Platform</th><th>Map</th><th>Result</th><th class="n">K / D</th><th class="n">HS %</th><th class="n">Preaim</th><th class="n">Reaction</th><th class="n">Rating</th><th>Matchroom</th></tr></thead><tbody>
     ${ms.map((m) => `<tr><td>${esc(dateLong(m.date))}</td><td><span class="src">${esc(m.source)}</span></td><td>${esc(m.map)}</td>
       <td>${m.outcome ? `<span class="badge ${m.outcome}">${m.outcome[0].toUpperCase()}</span> ${esc(m.score || "")}` : "–"}</td>
       <td class="n">${m.kills} / ${m.deaths}</td>
+      <td class="n">${cell(m.hs_pct, m.extremeHs, (v) => `${Math.round(v)}%`)}</td>
       <td class="n">${cell(m.aim_preaim, m.extremePreaim, (v) => `${v.toFixed(1)}°`)}</td>
       <td class="n">${cell(m.reaction_ms, m.extremeReaction, (v) => `${Math.round(v)} ms`)}</td>
-      <td class="n">${signed(m.rating, 2)}</td>
+      <td class="n">${m.rating != null ? signed(m.rating, 2) : faceitRating(m) != null ? `${fmt(faceitRating(m), 2)} <span class="muted" style="font-size:11px">FACEIT</span>` : "–"}</td>
       <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener" title="Open the FACEIT matchroom">FACEIT ↗</a>` : `<span class="muted" title="Matchrooms exist only for FACEIT matches">–</span>`}</td></tr>`).join("")}
   </tbody></table></div>`;
 }
@@ -463,6 +469,7 @@ function planSection(plan) {
       <ul class="todo">${a.actions.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
     </div>`;
   return `
+  ${plan.source ? `<div class="notice">${esc(plan.source)}</div>` : ""}
   <div class="grid g3 prios">${plan.priorities.map(prio).join("")}</div>
   ${plan.more.length ? `<div class="card" style="margin-bottom:16px"><h2>Also worth a look</h2><div class="sub">Lower priority – tackle these after the top three</div>
     <ul class="ins-list">${plan.more.map((a) => `<li><span class="ic" style="background:${css("--warn")}" aria-label="improve">!</span><span>${esc(a.title)}<span class="ref">${esc(a.evidence.map((e) => `${e.label}: ${e.value}`).join(" · ") || `on ${a.maps.join(", ")}`)}</span></span><span></span></li>`).join("")}</ul></div>` : ""}
@@ -484,6 +491,7 @@ function drawCoaching(c) {
   const sel = state.coachMap && c.maps.some((m) => m.map === state.coachMap) ? state.coachMap : c.maps[0].map;
   const m = c.maps.find((x) => x.map === sel), p = m.stats, o = m.others || {};
   const row = (label, a, b, f, better) => {
+    if (a == null && b == null) return ""; // metric not available from this player's data sources
     const diff = a != null && b != null ? (better === "high" ? a - b : b - a) : null;
     const cls = diff == null || Math.abs(diff) < 1e-9 ? "" : diff > 0 ? "up" : "down";
     return `<tr><td>${label}</td><td class="n ${cls}"><b>${a == null ? "–" : f(a)}</b></td><td class="n muted">${b == null ? "–" : f(b)}</td></tr>`;
@@ -501,6 +509,7 @@ function drawCoaching(c) {
       <div class="table-wrap"><table><thead><tr><th>${esc(sel)} · ${p.n} matches</th><th class="n">This map</th><th class="n">Other maps</th></tr></thead><tbody>
         ${row("Win rate", p.winrate, o.winrate, p0, "high")}
         ${row("Leetify rating", p.rating, o.rating, sg, "high")}
+        ${row("FACEIT rating", p.frating, o.frating, f2, "high")}
         ${row("CT-side rating", p.ct, o.ct, sg, "high")}
         ${row("T-side rating", p.t, o.t, sg, "high")}
         ${row("K/D", p.kd, o.kd, f2, "high")}
@@ -509,7 +518,10 @@ function drawCoaching(c) {
         ${row("Enemies flashed / flash", p.flash_eff, o.flash_eff, f2, "high")}
         ${row("Teammates flashed / flash", p.flash_team, o.flash_team, f2, "low")}
         ${row("HE damage / grenade", p.he_dmg, o.he_dmg, f1, "high")}
+        ${row("Utility damage / round", p.util_dmg, o.util_dmg, f1, "high")}
         ${row("Unused utility at death", p.util_death, o.util_death, (v) => `$${Math.round(v)}`, "low")}
+        ${row("Entry duels won", p.entry_success, o.entry_success, p0, "high")}
+        ${row("1v1 clutches won", p.clutch_1v1, o.clutch_1v1, p0, "high")}
         ${row("Trade kill success", p.trade, o.trade, p0, "high")}
         ${row("Deaths traded", p.traded, o.traded, p0, "high")}
         ${row("Rounds survived", p.survival, o.survival, p0, "high")}
@@ -632,31 +644,21 @@ function drawPremier(d) {
 function drawForm(d) {
   const ms = d.matches.slice(0, 40).reverse();
   const k = state.formMetric;
-  const get = { rating: (m) => m.rating, kd: (m) => (m.deaths ? m.kills / m.deaths : m.kills), adr: (m) => m.adr, hs: (m) => m.hs_pct }[k];
-  const ref = { rating: 0, kd: 1, adr: 80, hs: 45 }[k];
-  const yf = { rating: (v) => signed(v, 1), kd: (v) => fmt(v, 2), adr: (v) => fmt(v, 0), hs: (v) => `${fmt(v, 0)}%` }[k];
+  const get = { rating: (m) => m.rating, frating: faceitRating, kd: (m) => (m.deaths ? m.kills / m.deaths : m.kills), adr: (m) => m.adr, hs: (m) => m.hs_pct }[k];
+  const ref = { rating: 0, frating: 1, kd: 1, adr: 80, hs: 45 }[k];
+  const yf = { rating: (v) => signed(v, 1), frating: (v) => fmt(v, 2), kd: (v) => fmt(v, 2), adr: (v) => fmt(v, 0), hs: (v) => `${fmt(v, 0)}%` }[k];
   divergingBars($("#formChart"), {
     ref, yFmt: yf, rolling: 5,
     items: ms.map((m) => ({
       v: get(m),
       tip: `<div class="t">${esc(m.map)} · ${esc(m.score || "")} ${m.outcome ? `<span class="badge ${m.outcome}">${m.outcome[0].toUpperCase()}</span>` : ""}</div>
         ${tipRow("Date", dateLong(m.date))}${tipRow("Platform", m.source)}${tipRow("K / D / A", `${m.kills} / ${m.deaths} / ${m.assists}`)}
-        ${tipRow("ADR", fmt(m.adr, 1))}${tipRow("HS %", pct(m.hs_pct, 0))}${m.rating != null ? tipRow("Leetify rating", signed(m.rating, 2)) : ""}`,
+        ${tipRow("ADR", fmt(m.adr, 1))}${tipRow("HS %", pct(m.hs_pct, 0))}${m.rating != null ? tipRow("Leetify rating", signed(m.rating, 2)) : ""}${faceitRating(m) != null ? tipRow("FACEIT rating", fmt(faceitRating(m), 2)) : ""}`,
     })),
   });
 }
 
-/** HLTV Rating 1.0 from FACEIT's stats for a FACEIT match (FACEIT has no official per-match rating).
- *  (KPR/0.679 + 0.7 * survival/0.317 + multi-kill rating/1.277) / 2.7 */
-function faceitRating(m) {
-  if (m.source !== "faceit") return null;
-  const s = m.faceit_stats || m; // FACEIT's own numbers when we have them, else Leetify's record of the FACEIT match
-  const r = s.rounds, mk = s.multi;
-  if (!r || !mk || mk.length < 5) return null;
-  const kpr = s.kills / r, survival = (r - s.deaths) / r;
-  const multi = (mk[0] + 4 * mk[1] + 9 * mk[2] + 16 * mk[3] + 25 * mk[4]) / r;
-  return (kpr / 0.679 + (0.7 * survival) / 0.317 + multi / 1.277) / 2.7;
-}
+const faceitRating = (m) => Analysis.faceitRating(m); // HLTV Rating 1.0 from FACEIT's stats
 
 /** FACEIT matchroom for a FACEIT match (Leetify carries FACEIT's match id; FACEIT-only matches use it as their id). */
 function roomUrl(m, d) {

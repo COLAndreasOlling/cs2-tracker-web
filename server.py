@@ -248,6 +248,10 @@ def fetch_faceit(ident, cfg):
                 break
     except ApiError as e:
         raw["errors"].append(f"match stats: {e}")
+    try:
+        raw["bans"] = faceit_get(f"/players/{pid}/bans", key, limit=20).get("items", [])
+    except ApiError:
+        raw["bans"] = None  # unknown, not "no bans"
     return raw
 
 
@@ -255,7 +259,15 @@ def fetch_faceit(ident, cfg):
 FACEIT_FX = {"sniper_kills": "Sniper Kills", "entry_count": "Entry Count", "entry_wins": "Entry Wins",
              "first_kills": "First Kills", "util_dmg": "Utility Damage", "util_count": "Utility Count",
              "flash_count": "Flash Count", "enemies_flashed": "Enemies Flashed", "clutch_kills": "Clutch Kills",
-             "v1_count": "1v1Count", "v1_wins": "1v1Wins", "v2_count": "1v2Count", "v2_wins": "1v2Wins"}
+             "v1_count": "1v1Count", "v1_wins": "1v1Wins", "v2_count": "1v2Count", "v2_wins": "1v2Wins",
+             "flash_successes": "Flash Successes", "util_successes": "Utility Successes", "damage": "Damage",
+             "headshots": "Headshots", "mvps": "MVPs"}
+
+
+def score_rounds(score):
+    """Rounds played from a FACEIT score like "13 / 7"."""
+    parts = [num(x) for x in re.findall(r"\d+", str(score or ""))]
+    return sum(parts) if len(parts) == 2 else None
 
 
 def faceit_extended(st):
@@ -292,7 +304,7 @@ def normalize_faceit(raw):
     for it in raw.get("matches", []):
         st = it.get("stats", it)
         kills, deaths = num(pick(st, "Kills"), 0), num(pick(st, "Deaths"), 0)
-        rounds = num(pick(st, "Rounds"))
+        rounds = num(pick(st, "Rounds")) or score_rounds(pick(st, "Score"))
         result = pick(st, "Result")
         matches.append({
             "id": pick(st, "Match Id"),
@@ -341,8 +353,17 @@ def normalize_faceit(raw):
             "entry_rate": num(pick(life, "Entry Rate")),
             "utility_usage_pr": num(pick(life, "Utility Usage per Round")),
             "enemies_flashed_pr": num(pick(life, "Enemies Flashed per Round")),
+            "flashes_pr": num(pick(life, "Flashes per Round")),
+            "total_sniper_kills": num(pick(life, "Total Sniper Kills")),
+            "total_kills_ext": num(pick(life, "Total Kills with extended stats")),
+            "total_rounds_ext": num(pick(life, "Total Rounds with extended stats")),
+            "total_entry_count": num(pick(life, "Total Entry Count")),
             "recent_results": [str(r) for r in recent],
         },
+        # None = couldn't check; [] = checked, no bans
+        "bans": None if raw.get("bans") is None else [
+            {"reason": b.get("reason"), "type": b.get("type"), "game": b.get("game"), "starts_at": b.get("starts_at"), "ends_at": b.get("ends_at")}
+            for b in raw["bans"]],
         "maps": maps,
         "matches": matches,
     }
@@ -848,6 +869,26 @@ def demo_multi(rnd, kills):
     return m
 
 
+def demo_faceit_fx(rnd, mp, rounds, kills):
+    """FACEIT's extended stats for a demo match (utility weak on the same maps as the Leetify demo data)."""
+    u = DEMO_UTIL.get(mp, 1.0)
+    clamp = lambda v, lo, hi: max(lo, min(hi, v))
+    flashes = max(1, round(rounds * (0.25 + 0.25 * u) + rnd.gauss(0, 1.2)))
+    util = flashes + max(0, round(rounds * 0.75 * u + rnd.gauss(0, 1.5)))
+    entries = max(0, round(rounds * 0.17 + rnd.gauss(0, 1.2)))
+    v1, v2 = rnd.randint(0, 2), rnd.randint(0, 2)
+    return {
+        "Sniper Kills": str(min(kills, rnd.randint(0, 2))), "Entry Count": str(entries),
+        "Entry Wins": str(round(entries * clamp(0.5 + rnd.gauss(0, 0.15), 0, 1))), "First Kills": str(round(entries * 0.5)),
+        "Utility Count": str(util), "Utility Successes": str(round(util * 0.45 * u)),
+        "Utility Damage": str(max(0, round(rounds * 5.5 * u + rnd.gauss(0, 12)))), "Flash Count": str(flashes),
+        "Flash Successes": str(round(flashes * clamp(0.5 * u + rnd.gauss(0, 0.08), 0.05, 1))),
+        "Enemies Flashed": str(round(flashes * clamp(0.55 * u + rnd.gauss(0, 0.1), 0.05, 1.4))),
+        "Clutch Kills": str(rnd.randint(0, 2)), "1v1Count": str(v1), "1v1Wins": str(rnd.randint(0, v1)),
+        "1v2Count": str(v2), "1v2Wins": str(rnd.randint(0, v2) if rnd.random() < 0.3 else 0),
+    }
+
+
 def demo_detail(rnd, mp, rounds):
     """Utility/trade/accuracy fields of a demo match, in Leetify's per-match shape."""
     u = DEMO_UTIL.get(mp, 1.0)
@@ -929,9 +970,7 @@ def demo_raw():
                                       "ADR": str(round(kills / rounds * 112, 1)), "Headshots %": str(round(100 * hs / kills)),
                                       "Result": "1" if win else "0", "Score": f"{my} / {op}", "Rounds": str(my + op),
                                       "Double Kills": str(mk[1]), "Triple Kills": str(mk[2]), "Quadro Kills": str(mk[3]), "Penta Kills": str(mk[4]),
-                                      "Sniper Kills": str(rnd.randint(0, 2)), "Entry Count": str(rnd.randint(1, 4)), "Entry Wins": str(rnd.randint(0, 2)),
-                                      "Utility Count": str(round((my + op) * 1.3)), "Flash Count": str(round((my + op) * 0.5)),
-                                      "Enemies Flashed": str(round((my + op) * 0.25)), "Utility Damage": str(rnd.randint(60, 240)),
+                                      **demo_faceit_fx(rnd, mp, my + op, kills),
                                       "Match Finished At": int(when.timestamp() * 1000)}})
     leetify = {"available": True, "errors": [], "matches": l_matches, "profile": {
         "privacy_mode": "public", "winrate": 0.54, "total_matches": 812, "first_match_date": "2023-09-27T18:00:00Z",
@@ -947,7 +986,7 @@ def demo_raw():
                   "t_opening_duel_success_percentage": 44.1, "traded_deaths_success_percentage": 39.2,
                   "trade_kill_opportunities_per_round": 0.31, "trade_kills_success_percentage": 58.3, "utility_on_death_avg": 342.1},
         "recent_matches": l_recent, "recent_teammates": []}}
-    faceit = {"available": True, "errors": [], "matches": f_items,
+    faceit = {"available": True, "errors": [], "matches": f_items, "bans": [],
               "player": {"player_id": "demo", "nickname": "demo_player", "avatar": "", "country": "dk",
                          "faceit_url": "https://www.faceit.com/{lang}/players/demo_player",
                          "games": {"cs2": {"faceit_elo": 1785, "skill_level": 8, "game_player_id": DEMO_STEAM64, "region": "EU"}}},
@@ -955,6 +994,9 @@ def demo_raw():
                                      "Average Headshots %": "48", "ADR": "81.4", "Current Win Streak": "2", "Longest Win Streak": "9",
                                      "Entry Success Rate": "0.47", "Utility Damage per Round": "6.1", "Flash Success Rate": "0.41",
                                      "1v1 Win Rate": "0.58", "1v2 Win Rate": "0.24", "Sniper Kill Rate": "0.06",
+                                     "Entry Rate": "0.17", "Utility Usage per Round": "1.3", "Enemies Flashed per Round": "0.26",
+                                     "Flashes per Round": "0.48", "Total Sniper Kills": "410", "Total Kills with extended stats": "6800",
+                                     "Total Rounds with extended stats": "9100", "Total Entry Count": "1540",
                                      "Recent Results": ["1", "1", "0", "1", "0"]},
                         "segments": [{"type": "Map", "mode": "5v5", "label": m, "stats": {
                             "Matches": str(rnd.randint(40, 140)), "Win Rate %": str(round(52 + skill[m] * 60)),
@@ -983,8 +1025,10 @@ def demo_history():
 
 def lookup(q):
     cfg = load_config()
-    if q.strip().lower() == "demo":
+    if q.strip().lower() in ("demo", "demo-faceit"):
         fr, lr = demo_raw()
+        if q.strip().lower() == "demo-faceit":  # a player without a Leetify profile
+            lr = {"available": False, "reason": "Demo: this player has no Leetify profile."}
         s = build_summary(normalize_faceit(fr), normalize_leetify(lr, DEMO_STEAM64), DEMO_STEAM64)
         s["demo"] = True
         s["history"] = demo_history()

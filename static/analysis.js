@@ -6,9 +6,13 @@
  *    anti-cheat can establish cheating.
  *  - Analysis.mapCoaching(d): per-map strengths/weaknesses vs the player's own
  *    other maps, turned into concrete tips.
+ *  - Analysis.coachingPlan(d, coach): ranked priorities across all maps.
+ *  - Analysis.role(d): statistical role estimate.
  *
- * Aim data (preaim, reaction time, accuracy) comes from Leetify; FACEIT's API
- * has no aim-level data, and neither API exposes positions/rotations.
+ * Everything works from Leetify data where it exists and falls back to FACEIT's
+ * own match stats (utility, flashes, entries, clutches, sniper kills) for
+ * players without a Leetify profile. Aim data (preaim, reaction time) only
+ * exists in Leetify; neither API exposes positions/rotations.
  */
 "use strict";
 
@@ -17,32 +21,57 @@ const Analysis = (() => {
   const sum = (xs) => xs.reduce((a, b) => a + (b || 0), 0);
   const ratio = (a, b) => (b ? a / b : null);
   const r1 = (v) => (Math.abs(v) < 0.05 ? 0 : v).toFixed(1); // no "-0.0"
+  const frac = (v) => (v == null ? null : v > 1 ? v / 100 : v); // FACEIT rates come as 0-1 or as %
+
+  /** FACEIT's extended stats for a match: its own (FACEIT-only match) or attached to the Leetify record. */
+  const fxOf = (m) => m.fx || m.faceit_stats?.fx || null;
+
+  /** HLTV Rating 1.0 for a FACEIT match from FACEIT's stats (FACEIT has no official per-match rating).
+   *  (KPR/0.679 + 0.7 * survival/0.317 + multi-kill rating/1.277) / 2.7 */
+  function faceitRating(m) {
+    if (m.source !== "faceit") return null;
+    const s = m.faceit_stats || m; // FACEIT's own numbers when we have them, else Leetify's record of the FACEIT match
+    const r = s.rounds, mk = s.multi;
+    if (!r || !mk || mk.length < 5) return null;
+    const kpr = s.kills / r, survival = (r - s.deaths) / r;
+    const multi = (mk[0] + 4 * mk[1] + 9 * mk[2] + 16 * mk[3] + 25 * mk[4]) / r;
+    return (kpr / 0.679 + (0.7 * survival) / 0.317 + multi / 1.277) / 2.7;
+  }
 
   /* --------------------------------------------------------- integrity --- */
   // Reference: a top professional's Leetify profile (s1mple, observed Oct 2026) averaged
   // ~5.8° preaim, ~417 ms reaction time and ~24% head accuracy. Thresholds sit beyond that.
+  // FACEIT-only checks use headshot %, which for most players sits around 40-55%.
   const PRO_REF = { preaim: 5.8, reaction: 417, head: 23.8 };
-  const T = { preaim: 4.5, reaction: 370, head: 30, matchPreaim: 3.0, matchReaction: 300, extremeShare: 0.25 };
+  const T = { preaim: 4.5, reaction: 370, head: 30, matchPreaim: 3.0, matchReaction: 300, extremeShare: 0.25,
+    lifeHs: 68, matchHs: 80, matchHsKills: 15, hsShare: 0.2 };
 
   function integrity(d) {
-    const lt = d.leetify || {}, st = lt.stats || {}, items = [];
+    const lt = d.leetify || {}, st = lt.stats || {}, fc = d.faceit || {}, items = [];
     const add = (status, label, value, ref, detail, matches) => items.push({ status, label, value, ref, detail, matches });
-    if (!lt.available) return { available: false, reason: "Needs Leetify data (aim statistics come from Leetify)." };
+    if (!lt.available && !fc.available) return { available: false, reason: "Needs Leetify or FACEIT data." };
 
-    // 1. bans recorded on the player's own accounts
-    if ((lt.bans || []).length)
-      add("flag", "Platform ban on record", lt.bans.map((b) => b.platform).join(", "), "none", "Leetify lists a ban on one of this player's linked platform accounts.");
-    else add("ok", "Platform bans on record", "none", "none");
+    // 1. bans on record
+    if (fc.available && fc.bans) {
+      if (fc.bans.length) add("flag", "FACEIT ban on record", fc.bans.map((b) => [b.reason, b.type].filter(Boolean).join(" – ") || "ban").join("; "), "none", "Listed by FACEIT for this account.");
+      else add("ok", "FACEIT bans on record", "none", "none");
+    }
+    if (lt.available) {
+      if ((lt.bans || []).length) add("flag", "Platform ban on record", lt.bans.map((b) => b.platform).join(", "), "none", "Leetify lists a ban on one of this player's linked platform accounts.");
+      else add("ok", "Platform bans on record (Leetify)", "none", "none");
+    }
 
-    // 2-4. lifetime aim averages vs a top-pro reference
-    const lifetime = [
-      ["Average crosshair placement (preaim)", st.preaim, (v) => `${v.toFixed(1)}°`, (v) => v < T.preaim, `top pro ≈ ${PRO_REF.preaim}°; outlier below ${T.preaim}°`],
-      ["Average reaction time", st.reaction_time_ms, (v) => `${Math.round(v)} ms`, (v) => v < T.reaction, `top pro ≈ ${PRO_REF.reaction} ms; outlier below ${T.reaction} ms`],
-      ["Head accuracy", st.accuracy_head, (v) => `${v.toFixed(1)}%`, (v) => v > T.head, `top pro ≈ ${PRO_REF.head}%; outlier above ${T.head}%`],
-    ];
-    for (const [label, v, f, isOut, ref] of lifetime) if (v != null) add(isOut(v) ? "outlier" : "ok", label, f(v), ref);
+    // 2-4. lifetime aim averages vs a top-pro reference (Leetify)
+    if (lt.available) {
+      const lifetime = [
+        ["Average crosshair placement (preaim)", st.preaim, (v) => `${v.toFixed(1)}°`, (v) => v < T.preaim, `top pro ≈ ${PRO_REF.preaim}°; outlier below ${T.preaim}°`],
+        ["Average reaction time", st.reaction_time_ms, (v) => `${Math.round(v)} ms`, (v) => v < T.reaction, `top pro ≈ ${PRO_REF.reaction} ms; outlier below ${T.reaction} ms`],
+        ["Head accuracy", st.accuracy_head, (v) => `${v.toFixed(1)}%`, (v) => v > T.head, `top pro ≈ ${PRO_REF.head}%; outlier above ${T.head}%`],
+      ];
+      for (const [label, v, f, isOut, ref] of lifetime) if (v != null) add(isOut(v) ? "outlier" : "ok", label, f(v), ref);
+    }
 
-    // 5. share of individual matches with extreme aim values
+    // 5. share of individual matches with extreme aim values (Leetify)
     const ms = (d.matches || []).filter((m) => m.aim_preaim != null || m.reaction_ms != null);
     if (ms.length >= 10) {
       const extreme = ms.filter((m) => (m.aim_preaim != null && m.aim_preaim < T.matchPreaim) || (m.reaction_ms != null && m.reaction_ms < T.matchReaction));
@@ -53,7 +82,7 @@ const Analysis = (() => {
           extremeReaction: m.reaction_ms != null && m.reaction_ms < T.matchReaction })));
     }
 
-    // 6. sudden improvement: recent matches vs older ones (chronological order is newest first)
+    // 6. sudden improvement in aim: recent matches vs older ones (newest first)
     if (ms.length >= 30) {
       const recent = ms.slice(0, 15), older = ms.slice(15);
       const pr = mean(recent.map((m) => m.aim_preaim)), po = mean(older.map((m) => m.aim_preaim));
@@ -67,8 +96,37 @@ const Analysis = (() => {
       }
     }
 
-    // 7. mechanical skill out of line with rank
-    const aim = lt.rating?.aim, premier = lt.ranks?.premier, level = d.faceit?.available ? d.faceit.level : lt.ranks?.faceit;
+    // FACEIT: headshot % and K/D signals (available without Leetify)
+    const fm = (d.matches || []).filter((m) => m.source === "faceit" && m.hs_pct != null && m.kills != null);
+    const life = fc.available ? fc.lifetime || {} : {};
+    if (life.hs != null && (life.matches || 0) >= 50)
+      add(life.hs > T.lifeHs ? "outlier" : "ok", "FACEIT lifetime headshot %", `${Math.round(life.hs)}%`, `most players ≈ 40–55%; outlier above ${T.lifeHs}%`);
+    if (fm.length >= 10) {
+      const extreme = fm.filter((m) => m.hs_pct >= T.matchHs && m.kills >= T.matchHsKills);
+      const share = extreme.length / fm.length;
+      add(share > T.hsShare ? "outlier" : extreme.length ? "note" : "ok", "FACEIT matches with extreme headshot %",
+        `${extreme.length} of ${fm.length}`, `≥ ${T.matchHs}% headshots with ≥ ${T.matchHsKills} kills; outlier above ${Math.round(T.hsShare * 100)}% of matches`,
+        null, extreme.map((m) => ({ ...m, extremeHs: true })));
+    }
+    if (fm.length >= 30) {
+      const recent = fm.slice(0, 10), older = fm.slice(10);
+      const kd = (xs) => ratio(sum(xs.map((m) => m.kills)), sum(xs.map((m) => m.deaths)));
+      const hsR = mean(recent.map((m) => m.hs_pct)), hsO = mean(older.map((m) => m.hs_pct)), kdR = kd(recent), kdO = kd(older);
+      if (hsR != null && hsO != null && kdR != null && kdO != null) {
+        const hsJump = hsR - hsO >= 15, kdJump = kdR - kdO >= 0.4;
+        add(hsJump && kdJump ? "outlier" : hsJump || kdJump ? "note" : "ok", "Sudden jump on FACEIT (last 10 vs earlier)",
+          `HS ${Math.round(hsO)}% → ${Math.round(hsR)}%, K/D ${kdO.toFixed(2)} → ${kdR.toFixed(2)}`, "outlier if HS% rises ≥15 points and K/D ≥0.4 together");
+      }
+    }
+    const level = fc.available ? fc.level : lt.ranks?.faceit;
+    const last20 = fm.slice(0, 20);
+    if (level && last20.length >= 10) {
+      const kd20 = ratio(sum(last20.map((m) => m.kills)), sum(last20.map((m) => m.deaths)));
+      if (kd20 != null) add(kd20 >= 1.6 && level <= 4 ? "note" : "ok", "K/D vs FACEIT level", `K/D ${kd20.toFixed(2)} at level ${level}`, "unusual: K/D ≥ 1.6 over 20 matches at level 4 or below (smurf or fast improver)");
+    }
+
+    // 7. mechanical skill out of line with rank (Leetify aim rating)
+    const aim = lt.rating?.aim, premier = lt.ranks?.premier;
     if (aim != null && (premier || level)) {
       const lowRank = (premier ? premier < 12000 : true) && (level ? level <= 5 : true);
       add(aim >= 90 && lowRank ? "note" : "ok", "Aim rating vs rank",
@@ -86,6 +144,7 @@ const Analysis = (() => {
     // context only: matches where someone (teammate or opponent) was later banned
     const banned = (d.matches || []).filter((m) => m.has_banned_player).length;
     const context = banned ? `${banned} of the last ${d.matches.length} matches included a player who was later banned (could be a teammate or an opponent – not evidence about this player).` : null;
+    const missing = lt.available ? null : "No Leetify profile, so aim statistics (crosshair placement, reaction time) aren't available – these checks use FACEIT's headshot, K/D and ban data instead.";
 
     const outliers = items.filter((i) => i.status === "outlier").length, flags = items.filter((i) => i.status === "flag").length;
     const notes = items.filter((i) => i.status === "note").length;
@@ -93,36 +152,59 @@ const Analysis = (() => {
     const verdict = {
       none: "No statistical anomalies – everything is within what strong legitimate players produce.",
       some: "A few unusual values. On their own these are common among talented players.",
-      high: "Several values beyond a top-pro reference at the same time. Worth a closer look at demos – still not proof.",
-      flag: "A platform ban is on record for this player.",
+      high: "Several values beyond the references at the same time. Worth a closer look at demos – still not proof.",
+      flag: "A ban is on record for this player.",
     }[level_];
-    return { available: true, level: level_, verdict, items, context, counts: { outliers, notes, flags } };
+    return { available: true, level: level_, verdict, items, context, missing, counts: { outliers, notes, flags } };
   }
 
   /* ------------------------------------------------------- map coaching --- */
+  /** Totals over the matches where both a and b are known (so ratios compare like with like). */
+  function pairSum(rows, fa, fb) {
+    let a = 0, b = 0, n = 0;
+    for (const m of rows) { const x = fa(m), y = fb(m); if (x != null && y != null && !Number.isNaN(x) && !Number.isNaN(y)) { a += x; b += y; n++; } }
+    return n ? { a, b, n } : null;
+  }
+
   function profile(ms) {
-    const ex = ms.filter((m) => m.ext && m.rounds);
-    if (!ex.length) return null;
+    const rows = ms.filter((m) => m.rounds);
+    if (!rows.length) return null;
+    const ex = rows.filter((m) => m.ext);
     const e = (k) => ex.map((m) => m.ext[k]);
-    const rounds = sum(ex.map((m) => m.rounds));
-    const flashes = sum(e("flash_thrown")), heThrown = sum(e("he_thrown"));
-    const nades = flashes + heThrown + sum(e("molotov_thrown")) + sum(e("smoke_thrown"));
+    const per = (f) => { const s = pairSum(rows, f, (m) => m.rounds); return s ? s.a / s.b : null; };
+    const util = (m) => (m.ext ? (m.ext.flash_thrown || 0) + (m.ext.he_thrown || 0) + (m.ext.molotov_thrown || 0) + (m.ext.smoke_thrown || 0) : fxOf(m)?.util_count);
+    const flashes = (m) => (m.ext ? m.ext.flash_thrown : fxOf(m)?.flash_count);
+    const blinded = (m) => (m.ext ? m.ext.flash_foe : fxOf(m)?.enemies_flashed);
+    const fl = pairSum(rows, blinded, flashes);
+    const heThrown = sum(e("he_thrown"));
+    const entries = pairSum(rows, (m) => fxOf(m)?.entry_wins, (m) => fxOf(m)?.entry_count);
+    const clutch = pairSum(rows, (m) => fxOf(m)?.v1_wins, (m) => fxOf(m)?.v1_count);
     const decided = ms.filter((m) => m.outcome === "win" || m.outcome === "loss");
     const k = sum(ms.map((m) => m.kills)), dth = sum(ms.map((m) => m.deaths));
+    const exRounds = sum(ex.map((m) => m.rounds));
     return {
       n: ms.length,
       winrate: decided.length ? (100 * decided.filter((m) => m.outcome === "win").length) / decided.length : null,
-      rating: mean(ms.map((m) => m.rating)), ct: mean(ms.map((m) => m.ct_rating)), t: mean(ms.map((m) => m.t_rating)),
-      kd: ratio(k, dth), adr: mean(ms.map((m) => m.adr)),
-      util_pr: ratio(nades, rounds),
+      rating: mean(ms.map((m) => m.rating)), frating: mean(ms.map(faceitRating)),
+      ct: mean(ms.map((m) => m.ct_rating)), t: mean(ms.map((m) => m.t_rating)),
+      kd: ratio(k, dth), adr: mean(ms.map((m) => m.adr)), kpr: per((m) => m.kills), apr: per((m) => m.assists),
+      util_pr: per(util),
       // grenade efficiency needs a minimum sample, or a couple of throws decide the tip
-      flash_eff: flashes >= 10 ? ratio(sum(e("flash_foe")), flashes) : null,
-      flash_team: flashes >= 10 ? ratio(sum(e("flash_friend")), flashes) : null,
+      flash_eff: fl && fl.b >= 10 ? fl.a / fl.b : null,
+      blinded_pr: per(blinded),
+      flash_team: ex.length && sum(e("flash_thrown")) >= 10 ? ratio(sum(e("flash_friend")), sum(e("flash_thrown"))) : null,
       he_dmg: heThrown >= 5 ? ratio(sum(ex.map((m) => (m.ext.he_dmg_avg || 0) * (m.ext.he_thrown || 0))), heThrown) : null,
+      util_dmg: per((m) => fxOf(m)?.util_dmg), // FACEIT: utility damage per round
       util_death: mean(e("util_on_death")),
       trade: ratio(100 * sum(e("trade_succ")), sum(e("trade_opps"))),
       traded: ratio(100 * sum(e("traded_succ")), sum(e("traded_opps"))),
-      survival: ratio(100 * sum(e("survived")), rounds),
+      trade_opp_pr: ex.length ? ratio(sum(e("trade_opps")), exRounds) : null,
+      traded_opp_pr: ex.length ? ratio(sum(e("traded_opps")), exRounds) : null,
+      survival: (() => { const v = per((m) => (m.ext?.survived != null ? m.ext.survived : m.deaths != null ? Math.max(0, m.rounds - m.deaths) : null)); return v == null ? null : 100 * v; })(),
+      entry_rate: per((m) => fxOf(m)?.entry_count),
+      entry_success: entries && entries.b >= 10 ? (100 * entries.a) / entries.b : null,
+      clutch_1v1: clutch && clutch.b >= 5 ? (100 * clutch.a) / clutch.b : null,
+      sniper_share: (() => { const s = pairSum(rows, (m) => fxOf(m)?.sniper_kills, (m) => m.kills); return s && s.b >= 50 ? s.a / s.b : null; })(),
       preaim: mean(ms.map((m) => m.aim_preaim)),
       head: mean(e("acc_head")),
     };
@@ -140,6 +222,10 @@ const Analysis = (() => {
       tip: (map, m, o) => `You die holding $${Math.round(m)} of unused utility on average on ${map} (vs $${Math.round(o)} elsewhere). Use it earlier – a molotov on a common push or a flash before you peek.` },
     { key: "he_dmg", bad: (m, o) => m < o * 0.7 && o - m >= 3, gap: (m, o) => (o - m) / o,
       tip: (map, m, o) => `Your HE grenades do ${m.toFixed(1)} damage each on ${map} vs ${o.toFixed(1)} elsewhere. Learn where defenders/attackers usually stack on ${map} and throw HEs there, ideally together with a teammate's.` },
+    { key: "util_dmg", bad: (m, o) => m < o * 0.7 && o - m >= 1, gap: (m, o) => (o - m) / o,
+      tip: (map, m, o) => `Your grenades do ${m.toFixed(1)} damage per round on ${map} vs ${o.toFixed(1)} elsewhere. Learn molotov and HE lineups for the common positions on ${map}.` },
+    { key: "entry_success", bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
+      tip: (map, m, o) => `You win ${Math.round(m)}% of your entry duels on ${map} vs ${Math.round(o)}% elsewhere. Enter behind a flash, or let a teammate take the first contact and trade it.` },
     { key: "trade", bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
       tip: (map, m, o) => `You trade a fallen teammate ${Math.round(m)}% of the time on ${map} vs ${Math.round(o)}% elsewhere. Stay close enough to your entry player to re-peek within a second or two.` },
     { key: "traded", bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
@@ -162,6 +248,7 @@ const Analysis = (() => {
   }
 
   const MIN_MATCHES = 5;
+  const hasDetail = (m) => !!(m.ext || fxOf(m));
 
   // Active Duty pool (Premier / FACEIT / pro play) - tips are only given for these maps, compared
   // with each other. Last changed 22 Jan 2026 (Anubis in, Train out). Update when Valve rotates maps.
@@ -176,9 +263,9 @@ const Analysis = (() => {
       if (isActiveDuty(m.map)) (byMap[m.map] ||= []).push(m);
       else outOfPool.add(m.map);
     }
-    const maps = Object.keys(byMap).filter((k) => byMap[k].filter((m) => m.ext).length >= MIN_MATCHES);
+    const maps = Object.keys(byMap).filter((k) => byMap[k].filter(hasDetail).length >= MIN_MATCHES);
     const base = { pool: ACTIVE_DUTY, outOfPool: [...outOfPool].sort(), minMatches: MIN_MATCHES };
-    if (!maps.length) return { ...base, available: false, reason: `Needs at least ${MIN_MATCHES} Leetify-analysed matches on an Active Duty map (${ACTIVE_DUTY.join(", ")}).` };
+    if (!maps.length) return { ...base, available: false, reason: `Needs at least ${MIN_MATCHES} matches with detailed stats (Leetify or FACEIT) on an Active Duty map (${ACTIVE_DUTY.join(", ")}).` };
     const result = maps.map((name) => {
       const p = profile(byMap[name]);
       const others = profile(Object.entries(byMap).filter(([k]) => k !== name).flatMap(([, v]) => v));
@@ -192,14 +279,16 @@ const Analysis = (() => {
         }
         const s = sideTip(name, p);
         if (s) tips.push(s);
-        if (p.winrate != null && others.winrate != null && p.winrate < others.winrate - 12 && p.rating != null && others.rating != null && p.rating >= others.rating)
+        const own = p.rating != null && others.rating != null ? [p.rating, others.rating] : p.frating != null && others.frating != null ? [p.frating, others.frating] : null;
+        if (own && p.winrate != null && others.winrate != null && p.winrate < others.winrate - 12 && own[0] >= own[1])
           tips.push({ key: "team", gap: 0.05, text: `You lose more on ${name} (${Math.round(p.winrate)}% win rate vs ${Math.round(others.winrate)}%) even though your own rating holds up – the issue is more likely team strategy on ${name} than your individual play.` });
       }
       tips.sort((a, b) => b.gap - a.gap);
       return { map: name, stats: p, others, tips: tips.slice(0, 4), strengths };
     });
     // weakest map first: most tips, then lowest rating
-    result.sort((a, b) => b.tips.length - a.tips.length || (a.stats?.rating ?? 0) - (b.stats?.rating ?? 0));
+    const score = (x) => x.stats?.rating ?? (x.stats?.frating != null ? (x.stats.frating - 1) * 10 : 0);
+    result.sort((a, b) => b.tips.length - a.tips.length || score(a) - score(b));
     const skipped = Object.keys(byMap).filter((k) => !maps.includes(k));
     return { ...base, available: true, maps: result, skipped };
   }
@@ -207,10 +296,11 @@ const Analysis = (() => {
   /* ------------------------------------------------------ coaching plan --- */
   // Areas of the game, each with checks against rough rule-of-thumb references (not official
   // benchmarks) and the map-coaching tip keys that point to the same problem. A problem that
-  // shows up on several maps raises the area's priority.
+  // shows up on several maps raises the area's priority. Checks marked noLeetify stand in for
+  // Leetify-only stats when the player has no Leetify profile.
   const clampSev = (x) => Math.max(0.2, Math.min(2, x));
   const AREAS = [
-    { id: "aim", title: "Aim mechanics", mapKeys: ["preaim"], checks: [
+    { id: "aim", title: "Aim & fragging", mapKeys: ["preaim"], checks: [
       { label: "Crosshair placement (preaim)", get: (c) => c.st.preaim, weak: (v) => v > 9, good: (v) => v <= 6, fmt: (v) => `${v.toFixed(1)}°`, ref: "≤ 6° good · > 9° weak", sev: (v) => (v - 9) / 3,
         action: "Keep your crosshair at head height on the next angle you'll clear – run a prefire-practice map for your main map 2–3× a week." },
       { label: "Reaction time", get: (c) => c.st.reaction_time_ms, weak: (v) => v > 600, good: (v) => v <= 500, fmt: (v) => `${Math.round(v)} ms`, ref: "≤ 500 ms good · > 600 ms weak", sev: (v) => (v - 600) / 150,
@@ -221,18 +311,24 @@ const Analysis = (() => {
         action: "Practise the AK/M4 spray pattern for the first 10 bullets on a wall, then in deathmatch – and burst at long range." },
       { label: "Head accuracy", get: (c) => c.st.accuracy_head, weak: (v) => v < 15, good: (v) => v >= 22, fmt: (v) => `${v.toFixed(1)}%`, ref: "≥ 22% good · < 15% weak", sev: (v) => (15 - v) / 7,
         action: "Deathmatch with headshot-only mode for 10 minutes to train head-level aim." },
+      { label: "Damage per round (ADR)", noLeetify: true, get: (c) => c.o.adr, weak: (v) => v < 70, good: (v) => v >= 85, fmt: (v) => v.toFixed(1), ref: "≥ 85 good · < 70 weak", sev: (v) => (70 - v) / 10,
+        action: "Warm up 10–15 minutes in deathmatch before playing, and practise peeking off-angles in a prefire map so your first bullets land." },
+      { label: "K/D", noLeetify: true, get: (c) => c.o.kd, weak: (v) => v < 0.9, good: (v) => v >= 1.15, fmt: (v) => v.toFixed(2), ref: "≥ 1.15 good · < 0.9 weak", sev: (v) => (0.9 - v) / 0.15,
+        action: "Take fewer 50/50 duels: peek with a flash or with a teammate, and fall back after a kill instead of re-peeking." },
     ] },
-    { id: "utility", title: "Utility usage", mapKeys: ["util_pr", "flash_eff", "flash_team", "util_death", "he_dmg"], checks: [
+    { id: "utility", title: "Utility usage", mapKeys: ["util_pr", "flash_eff", "flash_team", "util_death", "he_dmg", "util_dmg"], checks: [
       { label: "Utility rating", get: (c) => c.lt.rating?.utility, weak: (v) => v < 45, good: (v) => v >= 65, fmt: (v) => v.toFixed(0), ref: "≥ 65 good · < 45 weak (Leetify)", sev: (v) => (45 - v) / 15,
         action: "Learn 2 smokes, 1 molotov and 1 pop-flash for each bombsite on your 3 most-played maps." },
       { label: "Grenades thrown per round", get: (c) => c.p?.util_pr, weak: (v) => v < 1.0, good: (v) => v >= 1.5, fmt: (v) => v.toFixed(2), ref: "≥ 1.5 good · < 1.0 weak", sev: (v) => (1.0 - v) / 0.4,
         action: "Buy and use a full utility set when you can afford it – every round should start with a plan for your grenades." },
-      { label: "Enemies blinded per flash", get: (c) => c.st.flashbang_hit_foe_per_flashbang, weak: (v) => v < 0.4, good: (v) => v >= 0.6, fmt: (v) => v.toFixed(2), ref: "≥ 0.6 good · < 0.4 weak", sev: (v) => (0.4 - v) / 0.2,
+      { label: "Enemies blinded per flash", get: (c) => c.st.flashbang_hit_foe_per_flashbang ?? c.p?.flash_eff, weak: (v) => v < 0.4, good: (v) => v >= 0.6, fmt: (v) => v.toFixed(2), ref: "≥ 0.6 good · < 0.4 weak", sev: (v) => (0.4 - v) / 0.2,
         action: "Throw pop-flashes that burst as they cross the angle, not behind walls – practise 2 per site in a private server." },
       { label: "Teammates blinded per flash", get: (c) => c.st.flashbang_hit_friend_per_flashbang, weak: (v) => v >= 0.6, good: (v) => v <= 0.3, fmt: (v) => v.toFixed(2), ref: "≤ 0.3 good · ≥ 0.6 weak", sev: (v) => (v - 0.6) / 0.3,
         action: "Call every flash (\"flashing A main\") and throw over your teammates, not past them." },
       { label: "Unused utility at death", get: (c) => c.st.utility_on_death_avg, weak: (v) => v >= 300, good: (v) => v <= 150, fmt: (v) => `$${Math.round(v)}`, ref: "≤ $150 good · ≥ $300 weak", sev: (v) => (v - 300) / 200,
         action: "Use your grenades before you take a fight you might lose – a molotov on a push or a flash for your own peek." },
+      { label: "Utility damage per round", noLeetify: true, get: (c) => c.p?.util_dmg ?? c.fl.utility_dpr, weak: (v) => v < 3.5, good: (v) => v >= 7, fmt: (v) => v.toFixed(1), ref: "≥ 7 good · < 3.5 weak (FACEIT)", sev: (v) => (3.5 - v) / 2,
+        action: "Learn molotov and HE lineups for the common positions on your main maps – utility damage wins rounds without duels." },
     ] },
     { id: "teamplay", title: "Trading & teamplay", mapKeys: ["trade", "traded"], checks: [
       { label: "Trade kill success", get: (c) => c.st.trade_kills_success_percentage, weak: (v) => v < 40, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 40% weak", sev: (v) => (40 - v) / 15,
@@ -240,7 +336,7 @@ const Analysis = (() => {
       { label: "Deaths that get traded", get: (c) => c.st.traded_deaths_success_percentage, weak: (v) => v < 30, good: (v) => v >= 45, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 45% good · < 30% weak", sev: (v) => (30 - v) / 15,
         action: "Take fights where a teammate can swing for you; tell the team before you peek so someone is ready to trade." },
     ] },
-    { id: "positioning", title: "Positioning & opening duels", mapKeys: ["survival"], checks: [
+    { id: "positioning", title: "Positioning & opening duels", mapKeys: ["survival", "entry_success"], checks: [
       { label: "Positioning rating", get: (c) => c.lt.rating?.positioning, weak: (v) => v < 45, good: (v) => v >= 65, fmt: (v) => v.toFixed(0), ref: "≥ 65 good · < 45 weak (Leetify)", sev: (v) => (45 - v) / 15,
         action: "After first contact, reposition instead of re-peeking the same angle; avoid spots with no escape route." },
       { label: "Rounds survived", get: (c) => c.p?.survival, weak: (v) => v < 25, good: (v) => v >= 35, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 35% good · < 25% weak", sev: (v) => (25 - v) / 10,
@@ -249,12 +345,16 @@ const Analysis = (() => {
         action: "On CT, hold off-angles and use a crossfire with a teammate instead of taking the first duel alone." },
       { label: "Opening duels won on T", get: (c) => c.st.t_opening_duel_success_percentage, weak: (v) => v < 45, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 45% weak", sev: (v) => (45 - v) / 10,
         action: "On T, don't dry-peek for the opening kill – take it with a flash, or let your entry player take it and trade." },
+      { label: "Entry duels won", noLeetify: true, get: (c) => c.p?.entry_success ?? (frac(c.fl.entry_success) != null ? 100 * frac(c.fl.entry_success) : null), weak: (v) => v < 42, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 42% weak (FACEIT)", sev: (v) => (42 - v) / 10,
+        action: "Don't dry-peek for the opening kill – enter behind a flash, or let a teammate take first contact and trade it." },
     ] },
     { id: "rounds", title: "Clutches & round impact", mapKeys: [], checks: [
       { label: "Clutch rating", get: (c) => c.lt.rating?.clutch, weak: (v) => v < -1, good: (v) => v >= 2, fmt: (v) => (v > 0 ? "+" : "") + v.toFixed(1), ref: "≥ +2 good · < −1 weak (Leetify)", sev: (v) => (-1 - v) / 2,
         action: "In clutches, slow down: use the time, isolate one duel at a time, and play the bomb/sound instead of rushing peeks." },
       { label: "Opening rating", get: (c) => c.lt.rating?.opening, weak: (v) => v < -1, good: (v) => v >= 2, fmt: (v) => (v > 0 ? "+" : "") + v.toFixed(1), ref: "≥ +2 good · < −1 weak (Leetify)", sev: (v) => (-1 - v) / 2,
         action: "You're losing too many first duels – take opening fights only with utility or a teammate ready to trade." },
+      { label: "1v1 clutches won", noLeetify: true, get: (c) => c.p?.clutch_1v1 ?? (frac(c.fl.clutch_1v1) != null ? 100 * frac(c.fl.clutch_1v1) : null), weak: (v) => v < 45, good: (v) => v >= 60, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 60% good · < 45% weak (FACEIT)", sev: (v) => (45 - v) / 10,
+        action: "In clutches, slow down: use the time, isolate one duel at a time, and play the bomb/sound instead of rushing peeks." },
     ] },
   ];
 
@@ -265,6 +365,8 @@ const Analysis = (() => {
     flash_team: ["Teammates blinded per flash", "Call your flashes and throw them over teammates, not past them – especially on these maps."],
     util_death: ["Unused utility when dying", "Use your grenades earlier in the round on these maps instead of dying with them."],
     he_dmg: ["HE damage per grenade", "Learn the common stacking spots on these maps and throw HEs there, ideally together with a teammate."],
+    util_dmg: ["Utility damage per round", "Learn molotov and HE lineups for the common positions on these maps."],
+    entry_success: ["Entry duels won", "Enter behind a flash on these maps, or let a teammate take first contact and trade it."],
     trade: ["Trading teammates", "Stay close enough to your entry player to re-peek within a second or two."],
     traded: ["Getting traded", "Play positions where a teammate can swing for you instead of isolated spots."],
     survival: ["Rounds survived", "Fall back after first contact more often instead of forcing the duel."],
@@ -284,7 +386,8 @@ const Analysis = (() => {
   function coachingPlan(d, coach) {
     const lt = d.leetify || {};
     const pool = (d.matches || []).filter((m) => isActiveDuty(m.map));
-    const c = { lt: lt.available ? lt : {}, st: (lt.available && lt.stats) || {}, p: profile(pool.length ? pool : d.matches || []) };
+    const c = { lt: lt.available ? lt : {}, st: (lt.available && lt.stats) || {}, p: profile(pool.length ? pool : d.matches || []),
+      fl: d.faceit?.available ? d.faceit.lifetime || {} : {}, o: d.overall || {} };
     const mapsWith = (keys) => (coach?.available ? coach.maps.filter((m) => m.tips.some((t) => keys.includes(t.key))).map((m) => m.map) : []);
     const areas = [], keep = [];
 
@@ -292,6 +395,7 @@ const Analysis = (() => {
       const evidence = [], actions = [];
       let sev = 0;
       for (const ch of a.checks) {
+        if (ch.noLeetify && lt.available) continue;
         const v = ch.get(c);
         if (v == null || Number.isNaN(v)) continue;
         if (ch.weak(v)) { const s = clampSev(ch.sev(v)); sev += s; evidence.push({ label: ch.label, value: ch.fmt(v), ref: ch.ref, sev: s }); actions.push(ch.action); }
@@ -309,7 +413,7 @@ const Analysis = (() => {
       if (evidence.length) areas.push({ id: a.id, title: a.title, sev, evidence: evidence.sort((x, y) => y.sev - x.sev), actions, maps });
     }
 
-    // side balance across all maps
+    // side balance across all maps (Leetify)
     const ct = lt.rating?.ct, t = lt.rating?.t;
     if (ct != null && t != null && Math.abs(ct - t) >= 2.5) {
       const weakT = t < ct;
@@ -321,19 +425,21 @@ const Analysis = (() => {
         maps: mapsWith([weakT ? "t_side" : "ct_side"]) });
     }
 
-    // mental & consistency
+    // mental & consistency - Leetify rating, or the FACEIT rating without Leetify
     const tl = tilt(d.matches || []);
-    const rated = (d.matches || []).filter((m) => m.rating != null);
-    const badShare = rated.length >= 15 ? rated.filter((m) => m.rating < -3).length / rated.length : null;
+    const lRated = (d.matches || []).filter((m) => m.rating != null);
+    const fRated = (d.matches || []).map(faceitRating).filter((v) => v != null);
+    const bad = lRated.length >= 15 ? { share: lRated.filter((m) => m.rating < -3).length / lRated.length, label: "Matches with a very low Leetify rating (< −3)" }
+      : fRated.length >= 15 ? { share: fRated.filter((v) => v < 0.8).length / fRated.length, label: "Matches with a FACEIT rating below 0.80" } : null;
     const mental = { evidence: [], actions: [], sev: 0 };
     if (tl && tl.afterWin - tl.afterLoss >= 15) {
       mental.sev += clampSev((tl.afterWin - tl.afterLoss - 15) / 15 + 0.5);
       mental.evidence.push({ label: "Win rate after a loss vs after a win", value: `${Math.round(tl.afterLoss)}% vs ${Math.round(tl.afterWin)}%`, ref: "a 15+ point drop suggests tilt" });
       mental.actions.push("After 2 losses in a row, take a 15-minute break before queuing again.");
     }
-    if (badShare != null && badShare > 0.3) {
-      mental.sev += clampSev((badShare - 0.3) / 0.15 + 0.3);
-      mental.evidence.push({ label: "Matches with a very low Leetify rating (< −3)", value: `${Math.round(badShare * 100)}%`, ref: "over 30% means too many off-games" });
+    if (bad && bad.share > 0.3) {
+      mental.sev += clampSev((bad.share - 0.3) / 0.15 + 0.3);
+      mental.evidence.push({ label: bad.label, value: `${Math.round(bad.share * 100)}%`, ref: "over 30% means too many off-games" });
       mental.actions.push("Warm up for 10–15 minutes before your first match – deathmatch plus a few prefire runs.");
     }
     if (mental.evidence.length) areas.push({ id: "mental", title: "Consistency & tilt", maps: [], ...mental });
@@ -355,14 +461,15 @@ const Analysis = (() => {
     // a short weekly routine from the top priorities' first actions
     const routine = [{ area: "Every session", text: "Warm up 10–15 minutes before your first match: deathmatch at head height, then one prefire run of the map you'll play." },
       ...priorities.flatMap((a) => a.actions.slice(0, 2).map((text) => ({ area: a.title, text })))];
-    return { priorities, more, keep: keep.slice(0, 6), routine, matches: (d.matches || []).length };
+    return { priorities, more, keep: keep.slice(0, 6), routine, matches: (d.matches || []).length,
+      source: lt.available ? null : "No Leetify profile – this plan uses FACEIT's match stats (no aim mechanics or trade data)." };
   }
 
   /* ---------------------------------------------------------------- role --- */
   // A statistical estimate of the player's role (not an AI model): each role gets a 0-100 score
   // from the signals that are available, with the reasons shown. Ranges are rough references
-  // calibrated on real Leetify data; AWPer needs FACEIT's sniper-kill stats (Leetify has no
-  // per-weapon kills), so without them AWP is reported as "can't tell".
+  // calibrated on real Leetify data. AWPer needs FACEIT's sniper-kill stats (Leetify has no
+  // per-weapon kills); trade signals need Leetify. Missing signals are left out of the score.
   const lin = (x, lo, hi) => (x == null || Number.isNaN(x) ? null : Math.max(0, Math.min(1, (x - lo) / (hi - lo))));
   const inv = (v) => (v == null ? null : 1 - v); // "lower is more typical" signals, keeping null = unknown
   const ROLE_INFO = {
@@ -370,7 +477,7 @@ const Analysis = (() => {
     entry: { name: "Entry fragger", blurb: "First into the site – takes opening duels and dies where teammates can trade." },
     support: { name: "Support", blurb: "Utility-heavy: flashes and smokes for teammates, assists more than average." },
     lurker: { name: "Lurker", blurb: "Plays away from the team, catches rotations, and survives rounds alone." },
-    rifler: { name: "Second rifle / trader", blurb: "Follows the entry and trades – often in position to refrag a fallen teammate." },
+    rifler: { name: "Second rifle / trader", blurb: "Follows the entry and trades – a steady fragger who isn't first in." },
   };
 
   function weighted(parts) {
@@ -380,49 +487,36 @@ const Analysis = (() => {
   }
 
   function role(d) {
-    const all = (d.matches || []).filter((m) => m.ext && m.rounds);
-    const faceitOnes = all.filter((m) => m.source === "faceit");
-    const ms = faceitOnes.length >= 5 ? faceitOnes : all;
-    const basis = faceitOnes.length >= 5 ? `${ms.length} FACEIT matches` : `${ms.length} matches (fewer than 5 analysed FACEIT matches, so all platforms)`;
-    if (ms.length < 5) return { available: false, reason: "Needs at least 5 Leetify-analysed matches to estimate a role." };
+    const detailed = (d.matches || []).filter((m) => m.rounds && hasDetail(m));
+    const faceitOnes = detailed.filter((m) => m.source === "faceit");
+    const ms = faceitOnes.length >= 5 ? faceitOnes : detailed;
+    const basis = faceitOnes.length >= 5 ? `${ms.length} FACEIT matches` : `${ms.length} matches (fewer than 5 detailed FACEIT matches, so all platforms)`;
+    if (ms.length < 5) return { available: false, reason: "Needs at least 5 matches with detailed stats (Leetify or FACEIT) to estimate a role." };
 
-    const R = sum(ms.map((m) => m.rounds)), e = (k) => sum(ms.map((m) => m.ext[k]));
-    const kills = sum(ms.map((m) => m.kills));
-    const sig = {
-      tradeOpp: e("trade_opps") / R, // in position to refrag a teammate
-      tradedOpp: e("traded_opps") / R, // died where a teammate could trade (playing in front)
-      survival: (100 * e("survived")) / R,
-      util: (e("flash_thrown") + e("he_thrown") + e("molotov_thrown") + e("smoke_thrown")) / R,
-      enemiesFlashed: e("flash_foe") / R,
-      flashAssist: e("flash_assist") / R,
-      kpr: kills / R,
-      apr: sum(ms.map((m) => m.assists)) / R,
-    };
-    // FACEIT's extended stats (per match, or lifetime as a fallback)
-    const fx = (d.matches || []).filter((m) => m.source === "faceit").map((m) => ({ fx: (m.faceit_stats || m).fx, kills: (m.faceit_stats || m).kills, rounds: (m.faceit_stats || m).rounds })).filter((x) => x.fx);
-    const fxSum = (k) => { const v = fx.filter((x) => x.fx[k] != null); return v.length >= 5 ? { n: sum(v.map((x) => x.fx[k])), kills: sum(v.map((x) => x.kills)), rounds: sum(v.map((x) => x.rounds)) } : null; };
+    const p = profile(ms);
     const life = d.faceit?.available ? d.faceit.lifetime || {} : {};
-    const sn = fxSum("sniper_kills"), en = fxSum("entry_count");
-    let sniperShare = sn ? sn.n / sn.kills : life.sniper_kill_rate ?? null;
-    if (sniperShare != null && sniperShare > 1) sniperShare /= 100; // tolerate a percentage
-    let entryRate = en ? en.n / en.rounds : life.entry_rate ?? null;
-    if (entryRate != null && entryRate > 1) entryRate /= 100;
+    const sniperShare = p.sniper_share ?? (life.total_sniper_kills != null && life.total_kills_ext ? life.total_sniper_kills / life.total_kills_ext : frac(life.sniper_kill_rate));
+    const entryRate = p.entry_rate ?? frac(life.entry_rate);
+    const tradeSuccess = d.leetify?.stats?.trade_kills_success_percentage ?? null;
+    const sig = { tradeOpp: p.trade_opp_pr, tradedOpp: p.traded_opp_pr, survival: p.survival, util: p.util_pr, enemiesFlashed: p.blinded_pr,
+      kpr: p.kpr, apr: p.apr, adr: p.adr };
 
     const why = (label, value) => ({ label, value });
     const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
+    const known = (label, v, f) => (v == null || Number.isNaN(v) ? [] : [why(label, f(v))]);
     const scores = {
       awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.35), 0.85], [lin(sig.survival, 25, 45), 0.15]]),
       entry: weighted([[lin(entryRate, 0.08, 0.22), 0.45], [lin(sig.tradedOpp, 0.12, 0.32), 0.3], [inv(lin(sig.survival, 20, 45)), 0.25]]),
       support: weighted([[lin(sig.util, 0.9, 2.4), 0.35], [lin(sig.enemiesFlashed, 0.2, 0.9), 0.25], [lin(sig.apr, 0.08, 0.22), 0.2], [inv(lin(sig.kpr, 0.55, 0.95)), 0.2]]),
-      lurker: weighted([[inv(lin(sig.tradeOpp, 0.2, 0.5)), 0.4], [inv(lin(sig.tradedOpp, 0.1, 0.32)), 0.3], [lin(sig.survival, 25, 45), 0.3]]),
-      rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(d.leetify?.stats?.trade_kills_success_percentage, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2]]),
+      lurker: weighted([[inv(lin(sig.tradeOpp, 0.2, 0.5)), 0.4], [inv(lin(sig.tradedOpp, 0.1, 0.32)), 0.3], [lin(sig.survival, 25, 45), 0.3], [inv(lin(entryRate, 0.08, 0.22)), 0.3]]),
+      rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(tradeSuccess, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2], [lin(sig.adr, 70, 95), 0.3]]),
     };
     const reasons = {
-      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles", pct(100 * sniperShare)), why("Rounds survived", pct(sig.survival))],
-      entry: [...(entryRate != null ? [why("Entry attempts per round (FACEIT)", f2(entryRate))] : []), why("Deaths in tradeable spots per round", f2(sig.tradedOpp)), why("Rounds survived", pct(sig.survival))],
-      support: [why("Grenades per round", f2(sig.util)), why("Enemies flashed per round", f2(sig.enemiesFlashed)), why("Assists per round", f2(sig.apr)), why("Kills per round", f2(sig.kpr))],
-      lurker: [why("Trade chances per round (low = away from team)", f2(sig.tradeOpp)), why("Deaths in tradeable spots per round", f2(sig.tradedOpp)), why("Rounds survived", pct(sig.survival))],
-      rifler: [why("Trade chances per round", f2(sig.tradeOpp)), ...(d.leetify?.stats?.trade_kills_success_percentage != null ? [why("Trade kill success", pct(d.leetify.stats.trade_kills_success_percentage))] : []), why("Kills per round", f2(sig.kpr))],
+      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles", pct(100 * sniperShare)), ...known("Rounds survived", sig.survival, pct)],
+      entry: [...known("Entry attempts per round (FACEIT)", entryRate, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
+      support: [...known("Grenades per round", sig.util, f2), ...known("Enemies flashed per round", sig.enemiesFlashed, f2), ...known("Assists per round", sig.apr, f2), ...known("Kills per round", sig.kpr, f2)],
+      lurker: [...known("Trade chances per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct), ...known("Entry attempts per round (low = not first in)", entryRate, f2)],
+      rifler: [...known("Trade chances per round", sig.tradeOpp, f2), ...known("Trade kill success", tradeSuccess, pct), ...known("Kills per round", sig.kpr, f2), ...known("ADR", sig.adr, (v) => v.toFixed(1))],
     };
     const ranked = Object.keys(scores).map((k) => ({ id: k, ...ROLE_INFO[k], score: scores[k], why: reasons[k] }))
       .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
@@ -433,12 +527,15 @@ const Analysis = (() => {
 
     // traits that sit on top of the role
     const lr = d.leetify?.rating || {}, traits = [];
-    if (lr.clutch != null && lr.clutch >= 2) traits.push("Clutch player");
-    if (lr.opening != null && lr.opening >= 2) traits.push("Wins opening duels");
-    if (lr.opening != null && lr.opening <= -2) traits.push("Loses opening duels");
+    const clutch1v1 = p.clutch_1v1 ?? (frac(life.clutch_1v1) != null ? 100 * frac(life.clutch_1v1) : null);
+    const entryWin = p.entry_success ?? (frac(life.entry_success) != null ? 100 * frac(life.entry_success) : null);
+    if ((lr.clutch != null && lr.clutch >= 2) || (lr.clutch == null && clutch1v1 != null && clutch1v1 >= 60)) traits.push("Clutch player");
+    if ((lr.opening != null && lr.opening >= 2) || (lr.opening == null && entryWin != null && entryWin >= 55)) traits.push("Wins opening duels");
+    if ((lr.opening != null && lr.opening <= -2) || (lr.opening == null && entryWin != null && entryWin < 42)) traits.push("Loses opening duels");
     if (sig.kpr >= 0.85) traits.push("High fragger");
     if (lr.ct != null && lr.t != null && Math.abs(lr.ct - lr.t) >= 2.5) traits.push(lr.ct > lr.t ? "Stronger on CT" : "Stronger on T");
-    if (!(sniperShare != null)) traits.push("AWP use unknown (no FACEIT sniper data)");
+    if (sniperShare == null) traits.push("AWP use unknown (no FACEIT sniper data)");
+    if (!d.leetify?.available) traits.push("No Leetify data – trade signals unavailable");
 
     return {
       available: true, basis, confidence, traits, ranked,
@@ -447,5 +544,5 @@ const Analysis = (() => {
     };
   }
 
-  return { integrity, mapCoaching, coachingPlan, role };
+  return { integrity, mapCoaching, coachingPlan, role, faceitRating };
 })();
