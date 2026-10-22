@@ -244,6 +244,18 @@ const Engine = (() => {
     faceit: "faceit", esplay: "esplay", hltv: "pro (hltv)", renown: "renown" };
   const scale = (v) => (v == null ? null : v * 100); // leetify-style ratings come as fractions
 
+  /** Per-match detail used by the integrity check and map coaching (ratios as %, like the profile stats). */
+  const matchExt = (me) => ({
+    acc_head: scale(me.accuracy_head), acc_spotted: scale(me.accuracy_enemy_spotted), spray: scale(me.spray_accuracy),
+    counter_strafe: scale(me.counter_strafing_shots_good_ratio),
+    flash_thrown: me.flashbang_thrown ?? null, flash_foe: me.flashbang_hit_foe ?? null, flash_friend: me.flashbang_hit_friend ?? null,
+    flash_kill: me.flashbang_leading_to_kill ?? null, he_thrown: me.he_thrown ?? null, he_dmg_avg: me.he_foes_damage_avg ?? null,
+    molotov_thrown: me.molotov_thrown ?? null, smoke_thrown: me.smoke_thrown ?? null, util_on_death: me.utility_on_death_avg ?? null,
+    trade_opps: me.trade_kill_opportunities ?? null, trade_succ: me.trade_kills_succeed ?? null,
+    traded_opps: me.traded_death_opportunities ?? null, traded_succ: me.traded_deaths_succeed ?? null,
+    survived: me.rounds_survived ?? null,
+  });
+
   function normalizeLeetify(raw, steam64) {
     if (!raw.available) return raw;
     const p = raw.profile;
@@ -269,6 +281,7 @@ const Engine = (() => {
         mk3plus: ["multi3k", "multi4k", "multi5k"].reduce((a, k) => a + (me[k] || 0), 0),
         multi: [1, 2, 3, 4, 5].map((i) => me[`multi${i}k`] || 0),
         rank: rm.rank ?? null, rank_type: rm.rank_type ?? null, has_banned_player: m.has_banned_player,
+        ext: matchExt(me),
       });
     }
     matches.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
@@ -476,6 +489,37 @@ const Engine = (() => {
     };
   }
 
+  const DEMO_UTIL = { de_anubis: 0.5, de_nuke: 0.9 }; // demo player's utility is weak on Anubis
+  const DEMO_T_SIDE = { de_nuke: -0.035 }; // ...and their T side is weak on Nuke
+
+  /** Utility/trade/accuracy fields of a demo match, in Leetify's per-match shape. */
+  function demoDetail(rnd, mp, rounds) {
+    const u = DEMO_UTIL[mp] || 1, clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const flashes = Math.max(1, Math.round(rounds * (0.25 + 0.25 * u) + rnd.gauss(0, 1.2)));
+    const tradeOpps = Math.max(1, Math.round(rounds * 0.3 + rnd.gauss(0, 1)));
+    const tradedOpps = Math.max(1, Math.round(rounds * 0.25 + rnd.gauss(0, 1)));
+    return {
+      flashbang_thrown: flashes,
+      flashbang_hit_foe: Math.round(flashes * clamp(0.5 * u + rnd.gauss(0, 0.08), 0.05, 1.2)),
+      flashbang_hit_friend: Math.round(flashes * clamp(0.25 + (1 - u) * 0.5 + rnd.gauss(0, 0.08), 0, 1)),
+      flashbang_leading_to_kill: Math.round(flashes * clamp(0.12 * u + rnd.gauss(0, 0.04), 0, 0.5)),
+      he_thrown: Math.max(0, Math.round(rounds * 0.2 * u + rnd.gauss(0, 1))),
+      he_foes_damage_avg: roundOr(clamp(14 * u + rnd.gauss(0, 3), 0, 40), 1),
+      molotov_thrown: Math.max(0, Math.round(rounds * 0.2 * u + rnd.gauss(0, 1))),
+      smoke_thrown: Math.max(0, Math.round(rounds * 0.45 * u + rnd.gauss(0, 1.5))),
+      utility_on_death_avg: roundOr(clamp(180 + (1 - u) * 400 + rnd.gauss(0, 40), 0, 900), 1),
+      trade_kill_opportunities: tradeOpps,
+      trade_kills_succeed: Math.round(tradeOpps * clamp(0.55 + rnd.gauss(0, 0.12), 0, 1)),
+      traded_death_opportunities: tradedOpps,
+      traded_deaths_succeed: Math.round(tradedOpps * clamp(0.4 + rnd.gauss(0, 0.12), 0, 1)),
+      rounds_survived: Math.max(0, Math.round(rounds * clamp(0.3 + rnd.gauss(0, 0.07), 0, 1))),
+      accuracy_head: clamp(0.21 + rnd.gauss(0, 0.04), 0, 1),
+      accuracy_enemy_spotted: clamp(0.36 + rnd.gauss(0, 0.05), 0, 1),
+      spray_accuracy: clamp(0.39 + rnd.gauss(0, 0.08), 0, 1),
+      counter_strafing_shots_good_ratio: clamp(0.82 + rnd.gauss(0, 0.06), 0, 1),
+    };
+  }
+
   /** Synthetic data in the same shape as the real APIs, so demo exercises the full pipeline. */
   function demoRaw() {
     const rnd = rng(42);
@@ -503,9 +547,11 @@ const Engine = (() => {
         stats: [{
           steam64_id: DEMO_STEAM64, name: "demo_player", initial_team_number: 2, total_kills: kills, total_deaths: deaths,
           total_assists: rnd.int(1, 7), total_hs_kills: hs, dpr: roundOr((kills / rounds) * 112 + rnd.gauss(0, 6), 1),
-          rounds_count: my + op, leetify_rating: rating, ct_leetify_rating: rating + rnd.gauss(0, 0.02), t_leetify_rating: rating + rnd.gauss(0, 0.02),
+          rounds_count: my + op, leetify_rating: rating, ct_leetify_rating: rating + rnd.gauss(0, 0.02),
+          t_leetify_rating: rating + (DEMO_T_SIDE[mp] || 0) + rnd.gauss(0, 0.02),
           preaim: roundOr(7.5 - trend * 10 + rnd.gauss(0, 1), 2), reaction_time: 0.55 - trend * 0.4 + rnd.gauss(0, 0.04),
           multi1k: mk[0], multi2k: mk[1], multi3k: mk[2], multi4k: mk[3], multi5k: mk[4],
+          ...demoDetail(rnd, mp, my + op),
         }],
       });
       // walking back in time: ratings were lower in the past

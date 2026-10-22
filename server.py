@@ -347,6 +347,23 @@ LEETIFY_SOURCE = {"matchmaking": "premier", "matchmaking_competitive": "competit
                   "hltv": "pro (hltv)", "renown": "renown"}
 
 
+def match_ext(me):
+    """Per-match detail used by the integrity check and map coaching (ratios as %, like the profile stats)."""
+    pct = lambda v: None if v is None else v * 100
+    return {
+        "acc_head": pct(me.get("accuracy_head")), "acc_spotted": pct(me.get("accuracy_enemy_spotted")),
+        "spray": pct(me.get("spray_accuracy")), "counter_strafe": pct(me.get("counter_strafing_shots_good_ratio")),
+        "flash_thrown": me.get("flashbang_thrown"), "flash_foe": me.get("flashbang_hit_foe"),
+        "flash_friend": me.get("flashbang_hit_friend"), "flash_kill": me.get("flashbang_leading_to_kill"),
+        "he_thrown": me.get("he_thrown"), "he_dmg_avg": me.get("he_foes_damage_avg"),
+        "molotov_thrown": me.get("molotov_thrown"), "smoke_thrown": me.get("smoke_thrown"),
+        "util_on_death": me.get("utility_on_death_avg"),
+        "trade_opps": me.get("trade_kill_opportunities"), "trade_succ": me.get("trade_kills_succeed"),
+        "traded_opps": me.get("traded_death_opportunities"), "traded_succ": me.get("traded_deaths_succeed"),
+        "survived": me.get("rounds_survived"),
+    }
+
+
 def normalize_leetify(raw, steam64):
     if not raw.get("available"):
         return raw
@@ -386,6 +403,7 @@ def normalize_leetify(raw, steam64):
             "rank": rm.get("rank"),
             "rank_type": rm.get("rank_type"),
             "has_banned_player": m.get("has_banned_player"),
+            "ext": match_ext(me),
         })
     matches.sort(key=lambda m: m["date"] or "", reverse=True)
     r, st, rk = p.get("rating") or {}, p.get("stats") or {}, p.get("ranks") or {}
@@ -790,6 +808,39 @@ def tracked_players():
 DEMO_STEAM64 = "76561190000000000"
 
 
+DEMO_UTIL = {"de_anubis": 0.5, "de_nuke": 0.9}  # demo player's utility is weak on Anubis
+DEMO_T_SIDE = {"de_nuke": -0.035}  # ...and their T side is weak on Nuke
+
+
+def demo_detail(rnd, mp, rounds):
+    """Utility/trade/accuracy fields of a demo match, in Leetify's per-match shape."""
+    u = DEMO_UTIL.get(mp, 1.0)
+    clamp = lambda v, lo, hi: max(lo, min(hi, v))
+    flashes = max(1, round(rounds * (0.25 + 0.25 * u) + rnd.gauss(0, 1.2)))
+    trade_opps = max(1, round(rounds * 0.3 + rnd.gauss(0, 1)))
+    traded_opps = max(1, round(rounds * 0.25 + rnd.gauss(0, 1)))
+    return {
+        "flashbang_thrown": flashes,
+        "flashbang_hit_foe": round(flashes * clamp(0.5 * u + rnd.gauss(0, 0.08), 0.05, 1.2)),
+        "flashbang_hit_friend": round(flashes * clamp(0.25 + (1 - u) * 0.5 + rnd.gauss(0, 0.08), 0, 1)),
+        "flashbang_leading_to_kill": round(flashes * clamp(0.12 * u + rnd.gauss(0, 0.04), 0, 0.5)),
+        "he_thrown": max(0, round(rounds * 0.2 * u + rnd.gauss(0, 1))),
+        "he_foes_damage_avg": round(clamp(14 * u + rnd.gauss(0, 3), 0, 40), 1),
+        "molotov_thrown": max(0, round(rounds * 0.2 * u + rnd.gauss(0, 1))),
+        "smoke_thrown": max(0, round(rounds * 0.45 * u + rnd.gauss(0, 1.5))),
+        "utility_on_death_avg": round(clamp(180 + (1 - u) * 400 + rnd.gauss(0, 40), 0, 900), 1),
+        "trade_kill_opportunities": trade_opps,
+        "trade_kills_succeed": round(trade_opps * clamp(0.55 + rnd.gauss(0, 0.12), 0, 1)),
+        "traded_death_opportunities": traded_opps,
+        "traded_deaths_succeed": round(traded_opps * clamp(0.4 + rnd.gauss(0, 0.12), 0, 1)),
+        "rounds_survived": max(0, round(rounds * clamp(0.3 + rnd.gauss(0, 0.07), 0, 1))),
+        "accuracy_head": clamp(0.21 + rnd.gauss(0, 0.04), 0, 1),
+        "accuracy_enemy_spotted": clamp(0.36 + rnd.gauss(0, 0.05), 0, 1),
+        "spray_accuracy": clamp(0.39 + rnd.gauss(0, 0.08), 0, 1),
+        "counter_strafing_shots_good_ratio": clamp(0.82 + rnd.gauss(0, 0.06), 0, 1),
+    }
+
+
 def demo_raw():
     """Synthetic data in the same shape as the real APIs, so demo exercises the full pipeline."""
     rnd = random.Random(42)
@@ -822,9 +873,11 @@ def demo_raw():
                        "total_kills": kills, "total_deaths": deaths, "total_assists": rnd.randint(1, 7),
                        "total_hs_kills": hs, "dpr": round(kills / rounds * 112 + rnd.gauss(0, 6), 1),
                        "rounds_count": my + op, "leetify_rating": rating,
-                       "ct_leetify_rating": rating + rnd.gauss(0, 0.02), "t_leetify_rating": rating + rnd.gauss(0, 0.02),
+                       "ct_leetify_rating": rating + rnd.gauss(0, 0.02),
+                       "t_leetify_rating": rating + DEMO_T_SIDE.get(mp, 0) + rnd.gauss(0, 0.02),
                        "preaim": round(7.5 - trend * 10 + rnd.gauss(0, 1), 2), "reaction_time": 0.55 - trend * 0.4 + rnd.gauss(0, 0.04),
-                       **{f"multi{j + 1}k": mk[j] for j in range(5)}}],
+                       **{f"multi{j + 1}k": mk[j] for j in range(5)},
+                       **demo_detail(rnd, mp, my + op)}],
         })
         # walking back in time: ratings were lower in the past
         rank = None

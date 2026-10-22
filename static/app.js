@@ -307,6 +307,12 @@ function render(d) {
   <div class="section-title">Map pool</div>
   <div class="card table-wrap" style="margin-bottom:16px">${mapTable(d.map_pool, fc.available)}</div>
 
+  <div class="section-title">Map coaching</div>
+  <div class="card" id="coachCard" style="margin-bottom:16px"></div>
+
+  <div class="section-title">Integrity check</div>
+  ${integritySection(Analysis.integrity(d))}
+
   <div class="section-title">By platform</div>
   <div class="card table-wrap" style="margin-bottom:16px">${sourceTable(d.by_source)}</div>
 
@@ -320,7 +326,77 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawProgress(d); drawPremier(d); drawForm(d); drawMatches(d);
+  drawProgress(d); drawPremier(d); drawForm(d); drawMatches(d); drawCoaching(Analysis.mapCoaching(d));
+}
+
+/* ------------------------------------------------- integrity & coaching --- */
+const STATUS = {
+  ok: { icon: "✓", label: "Normal", color: "--good" },
+  note: { icon: "!", label: "Unusual", color: "--warn" },
+  outlier: { icon: "▲", label: "Outlier", color: "--bad" },
+  flag: { icon: "✕", label: "Ban", color: "--bad" },
+};
+
+function integritySection(r) {
+  if (!r.available) return `<div class="card empty">${esc(r.reason)}</div>`;
+  const head = { none: ["--good", "No anomalies"], some: ["--warn", "Some unusual values"], high: ["--bad", "Several outliers"], flag: ["--bad", "Ban on record"] }[r.level];
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="card-head"><div><h2>Statistical anomaly check</h2>
+      <div class="sub">Compares aim statistics with a top-pro reference. <b>This is not cheat detection</b> – talented players produce outliers too, and only FACEIT/Valve anti-cheat can establish cheating. Rotations and positioning aren't available from either API.</div></div>
+      <span class="pill" style="font-weight:600"><span class="dot" style="background:${css(head[0])}"></span>${head[1]}</span></div>
+    <p style="margin:0 0 12px">${esc(r.verdict)}</p>
+    <ul class="ins-list">${r.items.map((i) => {
+      const s = STATUS[i.status];
+      return `<li><span class="ic" style="background:${css(s.color)}" aria-label="${s.label}" title="${s.label}">${s.icon}</span>
+        <span>${esc(i.label)} <span class="muted" style="font-size:11px">· ${s.label}</span><span class="ref">${esc(i.ref)}${i.detail ? ` · ${esc(i.detail)}` : ""}</span></span>
+        <span class="val">${esc(i.value)}</span></li>`;
+    }).join("")}</ul>
+    ${r.context ? `<p class="muted" style="font-size:12px;margin:12px 0 0">${esc(r.context)}</p>` : ""}
+  </div>`;
+}
+
+const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",
+  he_dmg: "HE damage", trade: "trading teammates", traded: "getting traded", survival: "survival", preaim: "crosshair placement" };
+
+function drawCoaching(c) {
+  const el = $("#coachCard");
+  if (!c.available) { el.innerHTML = `<div class="empty">${esc(c.reason)}</div>`; return; }
+  const sel = state.coachMap && c.maps.some((m) => m.map === state.coachMap) ? state.coachMap : c.maps[0].map;
+  const m = c.maps.find((x) => x.map === sel), p = m.stats, o = m.others || {};
+  const row = (label, a, b, f, better) => {
+    const diff = a != null && b != null ? (better === "high" ? a - b : b - a) : null;
+    const cls = diff == null || Math.abs(diff) < 1e-9 ? "" : diff > 0 ? "up" : "down";
+    return `<tr><td>${label}</td><td class="n ${cls}"><b>${a == null ? "–" : f(a)}</b></td><td class="n muted">${b == null ? "–" : f(b)}</td></tr>`;
+  };
+  const f1 = (v) => v.toFixed(1), f2 = (v) => v.toFixed(2), p0 = (v) => `${Math.round(v)}%`, sg = (v) => (Math.abs(v) < 0.05 ? "0.0" : (v > 0 ? "+" : "") + v.toFixed(1));
+  el.innerHTML = `
+    <div class="card-head"><div><h2>What to work on, per map</h2><div class="sub">Each map compared with your other maps (Leetify-analysed matches). Green = better than your other maps, red = worse.${c.skipped.length ? ` Skipped (fewer than ${c.minMatches} matches): ${esc(c.skipped.join(", "))}.` : ""}</div></div>
+      <select id="coachSel" aria-label="Map">${c.maps.map((x) => `<option value="${esc(x.map)}" ${x.map === sel ? "selected" : ""}>${esc(x.map)} (${x.stats.n})${x.tips.length ? ` · ${x.tips.length} tip${x.tips.length > 1 ? "s" : ""}` : ""}</option>`).join("")}</select></div>
+    <div class="grid g2" style="margin:0">
+      <div>
+        ${m.tips.length ? `<ul class="ins-list">${m.tips.map((t) => `<li><span class="ic" style="background:${css("--warn")}" aria-label="tip">!</span><span>${esc(t.text)}</span><span></span></li>`).join("")}</ul>`
+          : `<div class="empty" style="padding:12px 0">No clear weak spots on ${esc(sel)} compared with your other maps.</div>`}
+        ${m.strengths.length ? `<p class="muted" style="font-size:12px;margin-top:12px">Better on ${esc(sel)} than elsewhere: ${m.strengths.map((k) => esc(COACH_LABELS[k] || k)).join(", ")}.</p>` : ""}
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>${esc(sel)} · ${p.n} matches</th><th class="n">This map</th><th class="n">Other maps</th></tr></thead><tbody>
+        ${row("Win rate", p.winrate, o.winrate, p0, "high")}
+        ${row("Leetify rating", p.rating, o.rating, sg, "high")}
+        ${row("CT-side rating", p.ct, o.ct, sg, "high")}
+        ${row("T-side rating", p.t, o.t, sg, "high")}
+        ${row("K/D", p.kd, o.kd, f2, "high")}
+        ${row("ADR", p.adr, o.adr, f1, "high")}
+        ${row("Grenades / round", p.util_pr, o.util_pr, f2, "high")}
+        ${row("Enemies flashed / flash", p.flash_eff, o.flash_eff, f2, "high")}
+        ${row("Teammates flashed / flash", p.flash_team, o.flash_team, f2, "low")}
+        ${row("HE damage / grenade", p.he_dmg, o.he_dmg, f1, "high")}
+        ${row("Unused utility at death", p.util_death, o.util_death, (v) => `$${Math.round(v)}`, "low")}
+        ${row("Trade kill success", p.trade, o.trade, p0, "high")}
+        ${row("Deaths traded", p.traded, o.traded, p0, "high")}
+        ${row("Rounds survived", p.survival, o.survival, p0, "high")}
+        ${row("Preaim", p.preaim, o.preaim, (v) => `${v.toFixed(1)}°`, "low")}
+      </tbody></table></div>
+    </div>`;
+  $("#coachSel").onchange = (e) => { state.coachMap = e.target.value; drawCoaching(c); };
 }
 
 const kpi = (k, v, dl) => `<div class="card kpi"><div class="k">${esc(k)}</div><div class="v">${v}</div><div class="d">${dl || "&nbsp;"}</div></div>`;
