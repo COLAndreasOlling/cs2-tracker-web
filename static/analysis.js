@@ -193,5 +193,158 @@ const Analysis = (() => {
     return { available: true, maps: result, minMatches: MIN_MATCHES, skipped };
   }
 
-  return { integrity, mapCoaching };
+  /* ------------------------------------------------------ coaching plan --- */
+  // Areas of the game, each with checks against rough rule-of-thumb references (not official
+  // benchmarks) and the map-coaching tip keys that point to the same problem. A problem that
+  // shows up on several maps raises the area's priority.
+  const clampSev = (x) => Math.max(0.2, Math.min(2, x));
+  const AREAS = [
+    { id: "aim", title: "Aim mechanics", mapKeys: ["preaim"], checks: [
+      { label: "Crosshair placement (preaim)", get: (c) => c.st.preaim, weak: (v) => v > 9, good: (v) => v <= 6, fmt: (v) => `${v.toFixed(1)}°`, ref: "≤ 6° good · > 9° weak", sev: (v) => (v - 9) / 3,
+        action: "Keep your crosshair at head height on the next angle you'll clear – run a prefire-practice map for your main map 2–3× a week." },
+      { label: "Reaction time", get: (c) => c.st.reaction_time_ms, weak: (v) => v > 600, good: (v) => v <= 500, fmt: (v) => `${Math.round(v)} ms`, ref: "≤ 500 ms good · > 600 ms weak", sev: (v) => (v - 600) / 150,
+        action: "Pre-aim and hold angles instead of moving the crosshair onto targets; 10 min of reflex training (e.g. Aim Botz) as warm-up." },
+      { label: "Counter-strafing", get: (c) => c.st.counter_strafing_good_shots_ratio, weak: (v) => v < 70, good: (v) => v >= 85, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 85% good · < 70% weak", sev: (v) => (70 - v) / 15,
+        action: "Counter-strafe drill: tap the opposite movement key and only fire once you're fully stopped." },
+      { label: "Spray accuracy", get: (c) => c.st.spray_accuracy, weak: (v) => v < 30, good: (v) => v >= 45, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 45% good · < 30% weak", sev: (v) => (30 - v) / 15,
+        action: "Practise the AK/M4 spray pattern for the first 10 bullets on a wall, then in deathmatch – and burst at long range." },
+      { label: "Head accuracy", get: (c) => c.st.accuracy_head, weak: (v) => v < 15, good: (v) => v >= 22, fmt: (v) => `${v.toFixed(1)}%`, ref: "≥ 22% good · < 15% weak", sev: (v) => (15 - v) / 7,
+        action: "Deathmatch with headshot-only mode for 10 minutes to train head-level aim." },
+    ] },
+    { id: "utility", title: "Utility usage", mapKeys: ["util_pr", "flash_eff", "flash_team", "util_death", "he_dmg"], checks: [
+      { label: "Utility rating", get: (c) => c.lt.rating?.utility, weak: (v) => v < 45, good: (v) => v >= 65, fmt: (v) => v.toFixed(0), ref: "≥ 65 good · < 45 weak (Leetify)", sev: (v) => (45 - v) / 15,
+        action: "Learn 2 smokes, 1 molotov and 1 pop-flash for each bombsite on your 3 most-played maps." },
+      { label: "Grenades thrown per round", get: (c) => c.p?.util_pr, weak: (v) => v < 1.0, good: (v) => v >= 1.5, fmt: (v) => v.toFixed(2), ref: "≥ 1.5 good · < 1.0 weak", sev: (v) => (1.0 - v) / 0.4,
+        action: "Buy and use a full utility set when you can afford it – every round should start with a plan for your grenades." },
+      { label: "Enemies blinded per flash", get: (c) => c.st.flashbang_hit_foe_per_flashbang, weak: (v) => v < 0.4, good: (v) => v >= 0.6, fmt: (v) => v.toFixed(2), ref: "≥ 0.6 good · < 0.4 weak", sev: (v) => (0.4 - v) / 0.2,
+        action: "Throw pop-flashes that burst as they cross the angle, not behind walls – practise 2 per site in a private server." },
+      { label: "Teammates blinded per flash", get: (c) => c.st.flashbang_hit_friend_per_flashbang, weak: (v) => v >= 0.6, good: (v) => v <= 0.3, fmt: (v) => v.toFixed(2), ref: "≤ 0.3 good · ≥ 0.6 weak", sev: (v) => (v - 0.6) / 0.3,
+        action: "Call every flash (\"flashing A main\") and throw over your teammates, not past them." },
+      { label: "Unused utility at death", get: (c) => c.st.utility_on_death_avg, weak: (v) => v >= 300, good: (v) => v <= 150, fmt: (v) => `$${Math.round(v)}`, ref: "≤ $150 good · ≥ $300 weak", sev: (v) => (v - 300) / 200,
+        action: "Use your grenades before you take a fight you might lose – a molotov on a push or a flash for your own peek." },
+    ] },
+    { id: "teamplay", title: "Trading & teamplay", mapKeys: ["trade", "traded"], checks: [
+      { label: "Trade kill success", get: (c) => c.st.trade_kills_success_percentage, weak: (v) => v < 40, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 40% weak", sev: (v) => (40 - v) / 15,
+        action: "When your entry player goes in, be ready to re-peek within 1–2 seconds – stay one step behind them, not across the map." },
+      { label: "Deaths that get traded", get: (c) => c.st.traded_deaths_success_percentage, weak: (v) => v < 30, good: (v) => v >= 45, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 45% good · < 30% weak", sev: (v) => (30 - v) / 15,
+        action: "Take fights where a teammate can swing for you; tell the team before you peek so someone is ready to trade." },
+    ] },
+    { id: "positioning", title: "Positioning & opening duels", mapKeys: ["survival"], checks: [
+      { label: "Positioning rating", get: (c) => c.lt.rating?.positioning, weak: (v) => v < 45, good: (v) => v >= 65, fmt: (v) => v.toFixed(0), ref: "≥ 65 good · < 45 weak (Leetify)", sev: (v) => (45 - v) / 15,
+        action: "After first contact, reposition instead of re-peeking the same angle; avoid spots with no escape route." },
+      { label: "Rounds survived", get: (c) => c.p?.survival, weak: (v) => v < 25, good: (v) => v >= 35, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 35% good · < 25% weak", sev: (v) => (25 - v) / 10,
+        action: "Play for information early in the round – fall back after contact more often instead of forcing the duel." },
+      { label: "Opening duels won on CT", get: (c) => c.st.ct_opening_duel_success_percentage, weak: (v) => v < 45, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 45% weak", sev: (v) => (45 - v) / 10,
+        action: "On CT, hold off-angles and use a crossfire with a teammate instead of taking the first duel alone." },
+      { label: "Opening duels won on T", get: (c) => c.st.t_opening_duel_success_percentage, weak: (v) => v < 45, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 45% weak", sev: (v) => (45 - v) / 10,
+        action: "On T, don't dry-peek for the opening kill – take it with a flash, or let your entry player take it and trade." },
+    ] },
+    { id: "rounds", title: "Clutches & round impact", mapKeys: [], checks: [
+      { label: "Clutch rating", get: (c) => c.lt.rating?.clutch, weak: (v) => v < -1, good: (v) => v >= 2, fmt: (v) => (v > 0 ? "+" : "") + v.toFixed(1), ref: "≥ +2 good · < −1 weak (Leetify)", sev: (v) => (-1 - v) / 2,
+        action: "In clutches, slow down: use the time, isolate one duel at a time, and play the bomb/sound instead of rushing peeks." },
+      { label: "Opening rating", get: (c) => c.lt.rating?.opening, weak: (v) => v < -1, good: (v) => v >= 2, fmt: (v) => (v > 0 ? "+" : "") + v.toFixed(1), ref: "≥ +2 good · < −1 weak (Leetify)", sev: (v) => (-1 - v) / 2,
+        action: "You're losing too many first duels – take opening fights only with utility or a teammate ready to trade." },
+    ] },
+  ];
+
+  // map-coaching tip keys -> what recurs, and what to do about it
+  const PATTERNS = {
+    util_pr: ["Grenades used per round", "Plan your utility for each round on these maps – learn the default smokes/molotovs for both sites."],
+    flash_eff: ["Enemies blinded per flash", "Practise pop-flashes for the main entrances on these maps in a private server."],
+    flash_team: ["Teammates blinded per flash", "Call your flashes and throw them over teammates, not past them – especially on these maps."],
+    util_death: ["Unused utility when dying", "Use your grenades earlier in the round on these maps instead of dying with them."],
+    he_dmg: ["HE damage per grenade", "Learn the common stacking spots on these maps and throw HEs there, ideally together with a teammate."],
+    trade: ["Trading teammates", "Stay close enough to your entry player to re-peek within a second or two."],
+    traded: ["Getting traded", "Play positions where a teammate can swing for you instead of isolated spots."],
+    survival: ["Rounds survived", "Fall back after first contact more often instead of forcing the duel."],
+    preaim: ["Crosshair placement", "Run a prefire-practice map for these maps to learn where enemies appear."],
+  };
+
+  /** Win rate after a loss vs after a win (chronological), a simple tilt signal. */
+  function tilt(ms) {
+    const seq = [...ms].reverse().filter((m) => m.outcome === "win" || m.outcome === "loss");
+    const after = { win: [], loss: [] };
+    for (let i = 1; i < seq.length; i++) after[seq[i - 1].outcome].push(seq[i].outcome === "win");
+    if (after.win.length < 8 || after.loss.length < 8) return null;
+    const wr = (xs) => (100 * xs.filter(Boolean).length) / xs.length;
+    return { afterWin: wr(after.win), afterLoss: wr(after.loss), n: after.loss.length };
+  }
+
+  function coachingPlan(d, coach) {
+    const lt = d.leetify || {};
+    const c = { lt: lt.available ? lt : {}, st: (lt.available && lt.stats) || {}, p: profile(d.matches || []) };
+    const mapsWith = (keys) => (coach?.available ? coach.maps.filter((m) => m.tips.some((t) => keys.includes(t.key))).map((m) => m.map) : []);
+    const areas = [], keep = [];
+
+    for (const a of AREAS) {
+      const evidence = [], actions = [];
+      let sev = 0;
+      for (const ch of a.checks) {
+        const v = ch.get(c);
+        if (v == null || Number.isNaN(v)) continue;
+        if (ch.weak(v)) { const s = clampSev(ch.sev(v)); sev += s; evidence.push({ label: ch.label, value: ch.fmt(v), ref: ch.ref, sev: s }); actions.push(ch.action); }
+        else if (ch.good(v)) keep.push({ label: ch.label, value: ch.fmt(v) });
+      }
+      const maps = mapsWith(a.mapKeys);
+      // the same problem on several maps is a pattern, not noise
+      for (const key of a.mapKeys) {
+        const on = mapsWith([key]);
+        if (on.length < 2 || !PATTERNS[key]) continue;
+        sev += 0.25 * on.length;
+        evidence.push({ label: `${PATTERNS[key][0]} – worse than on your other maps`, value: on.join(", "), ref: `recurring on ${on.length} maps`, sev: 0, pattern: true });
+        if (!actions.includes(PATTERNS[key][1])) actions.push(PATTERNS[key][1]);
+      }
+      if (evidence.length) areas.push({ id: a.id, title: a.title, sev, evidence: evidence.sort((x, y) => y.sev - x.sev), actions, maps });
+    }
+
+    // side balance across all maps
+    const ct = lt.rating?.ct, t = lt.rating?.t;
+    if (ct != null && t != null && Math.abs(ct - t) >= 2.5) {
+      const weakT = t < ct;
+      areas.push({ id: "side", title: weakT ? "T-side play" : "CT-side play", sev: clampSev(Math.abs(ct - t) / 4),
+        evidence: [{ label: `${weakT ? "T" : "CT"}-side rating vs ${weakT ? "CT" : "T"}`, value: `${(weakT ? t : ct).toFixed(1)} vs ${(weakT ? ct : t).toFixed(1)}`, ref: "a gap of 2.5+ is a clear weak side" }],
+        actions: weakT
+          ? ["Agree on 1–2 default executes per map with your team and arrive on site with utility, not one by one.", "As a T, trade your entry player instead of lurking far away early in the round."]
+          : ["On CT, play crossfires with a teammate and fall back to retake instead of dying alone on site.", "Use utility to delay pushes (molotov/HE) rather than relying on the first duel."],
+        maps: mapsWith([weakT ? "t_side" : "ct_side"]) });
+    }
+
+    // mental & consistency
+    const tl = tilt(d.matches || []);
+    const rated = (d.matches || []).filter((m) => m.rating != null);
+    const badShare = rated.length >= 15 ? rated.filter((m) => m.rating < -3).length / rated.length : null;
+    const mental = { evidence: [], actions: [], sev: 0 };
+    if (tl && tl.afterWin - tl.afterLoss >= 15) {
+      mental.sev += clampSev((tl.afterWin - tl.afterLoss - 15) / 15 + 0.5);
+      mental.evidence.push({ label: "Win rate after a loss vs after a win", value: `${Math.round(tl.afterLoss)}% vs ${Math.round(tl.afterWin)}%`, ref: "a 15+ point drop suggests tilt" });
+      mental.actions.push("After 2 losses in a row, take a 15-minute break before queuing again.");
+    }
+    if (badShare != null && badShare > 0.3) {
+      mental.sev += clampSev((badShare - 0.3) / 0.15 + 0.3);
+      mental.evidence.push({ label: "Matches with a very low Leetify rating (< −3)", value: `${Math.round(badShare * 100)}%`, ref: "over 30% means too many off-games" });
+      mental.actions.push("Warm up for 10–15 minutes before your first match – deathmatch plus a few prefire runs.");
+    }
+    if (mental.evidence.length) areas.push({ id: "mental", title: "Consistency & tilt", maps: [], ...mental });
+
+    // map pool: a clear worst map
+    if (coach?.available && coach.maps.length >= 3) {
+      const withWr = coach.maps.filter((m) => m.stats.winrate != null && m.stats.n >= 8);
+      const worst = withWr.reduce((a, b) => (b.stats.winrate < a.stats.winrate ? b : a), withWr[0]);
+      const avg = withWr.reduce((a, m) => a + m.stats.winrate * m.stats.n, 0) / withWr.reduce((a, m) => a + m.stats.n, 0);
+      if (worst && avg - worst.stats.winrate >= 12)
+        areas.push({ id: "mappool", title: `Weakest map: ${worst.map}`, sev: Math.min(1, clampSev((avg - worst.stats.winrate) / 30)), maps: [worst.map],
+          evidence: [{ label: `Win rate on ${worst.map} vs your average`, value: `${Math.round(worst.stats.winrate)}% vs ${Math.round(avg)}%`, ref: `${worst.stats.n} matches` }],
+          actions: [...(worst.tips[0] ? [worst.tips[0].text] : []),
+            `Either put focused practice into ${worst.map} or make it your first ban in FACEIT veto until it improves.`] });
+    }
+
+    areas.sort((a, b) => b.sev - a.sev);
+    const priorities = areas.slice(0, 3), more = areas.slice(3);
+    // a short weekly routine from the top priorities' first actions
+    const routine = [{ area: "Every session", text: "Warm up 10–15 minutes before your first match: deathmatch at head height, then one prefire run of the map you'll play." },
+      ...priorities.flatMap((a) => a.actions.slice(0, 2).map((text) => ({ area: a.title, text })))];
+    return { priorities, more, keep: keep.slice(0, 6), routine, matches: (d.matches || []).length };
+  }
+
+  return { integrity, mapCoaching, coachingPlan };
 })();

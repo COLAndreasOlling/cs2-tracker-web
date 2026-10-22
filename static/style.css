@@ -167,6 +167,15 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .ins-list .ref { display: block; font-size: 11px; color: var(--text-muted); }
 .ins-list .val { font-weight: 700; white-space: nowrap; }
 
+/* coaching plan */
+.prio { display: flex; flex-direction: column; }
+.prio-head { display: flex; gap: 12px; align-items: flex-start; }
+.prio-num { flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-weight: 800; background: var(--accent); color: #fff; }
+.prio-do { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 600; margin-top: 4px; }
+.todo { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.todo li { padding-left: 2px; }
+.todo li::marker { color: var(--accent); }
+
 /* stat tables */
 table { width: 100%; border-collapse: collapse; }
 th { text-align: left; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }

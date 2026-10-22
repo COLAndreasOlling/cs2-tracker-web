@@ -239,7 +239,7 @@ function render(d) {
   const score = d.score;
   const ringC = 2 * Math.PI * 52, ringFill = score == null ? 0 : (score / 100) * ringC;
 
-  const integ = Analysis.integrity(d), coach = Analysis.mapCoaching(d);
+  const integ = Analysis.integrity(d), coach = Analysis.mapCoaching(d), plan = Analysis.coachingPlan(d, coach);
   const integDot = integ.available ? { none: "--good", some: "--warn", high: "--bad", flag: "--bad" }[integ.level] : null;
   const tipCount = coach.available ? coach.maps.reduce((a, m) => a + m.tips.length, 0) : 0;
   const level = fc.available ? `Lvl ${fmtInt(fc.level)} · ${fmtInt(fc.elo)} ELO` : lt.available && lt.ranks.faceit_elo ? `Lvl ${fmtInt(lt.ranks.faceit)} · ${fmtInt(lt.ranks.faceit_elo)} ELO` : "";
@@ -333,11 +333,8 @@ function render(d) {
   </section>
 
   <section class="page" data-page="coaching" hidden>
-    <div class="section-title">Overall strengths &amp; areas to improve</div>
-  <div class="grid g2">
-    <div class="card"><h2>Strengths</h2><div class="sub">Compared with rough rule-of-thumb reference values</div>${insightList(d.insights.filter((i) => i.type === "strength"), true)}</div>
-    <div class="card"><h2>Areas to improve</h2><div class="sub">Compared with rough rule-of-thumb reference values</div>${insightList(d.insights.filter((i) => i.type === "weakness"), false)}</div>
-  </div>
+    <div class="section-title">Your coaching plan · all maps</div>
+    ${planSection(plan)}
 
     <div class="section-title">Map coaching</div>
     <div class="card" id="coachCard" style="margin-bottom:16px"></div>
@@ -429,6 +426,31 @@ function extremeMatches(ms, d) {
   </tbody></table></div>`;
 }
 
+/** Overall coaching plan: top priorities with evidence and actions, strengths, and a practice routine. */
+function planSection(plan) {
+  if (!plan.priorities.length)
+    return `<div class="card" style="margin-bottom:16px"><h2>No clear weak spots</h2><p class="muted" style="margin:6px 0 0">Nothing stands out against the reference values across your last ${plan.matches} matches – keep going, and check the map tips below for smaller gains.</p></div>`;
+  const prio = (a, i) => `
+    <div class="card prio">
+      <div class="prio-head"><span class="prio-num">${i + 1}</span><div><h2>${esc(a.title)}</h2>
+        ${a.maps.length ? `<div class="sub" style="margin:2px 0 0">Shows up most on: ${esc(a.maps.join(", "))}</div>` : ""}</div></div>
+      ${a.evidence.length ? `<div class="statlist" style="margin:10px 0">${a.evidence.map((e) => `<div class="row"><span>${esc(e.label)}<span class="ref muted" style="display:block;font-size:11px">${esc(e.ref)}</span></span><b class="${e.pattern ? "" : "down"}">${esc(e.value)}</b></div>`).join("")}</div>` : ""}
+      <div class="prio-do">What to do</div>
+      <ul class="todo">${a.actions.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+    </div>`;
+  return `
+  <div class="grid g3 prios">${plan.priorities.map(prio).join("")}</div>
+  ${plan.more.length ? `<div class="card" style="margin-bottom:16px"><h2>Also worth a look</h2><div class="sub">Lower priority – tackle these after the top three</div>
+    <ul class="ins-list">${plan.more.map((a) => `<li><span class="ic" style="background:${css("--warn")}" aria-label="improve">!</span><span>${esc(a.title)}<span class="ref">${esc(a.evidence.map((e) => `${e.label}: ${e.value}`).join(" · ") || `on ${a.maps.join(", ")}`)}</span></span><span></span></li>`).join("")}</ul></div>` : ""}
+  <div class="grid g2">
+    <div class="card"><h2>Practice routine</h2><div class="sub">A weekly checklist built from your top priorities</div>
+      <ul class="todo">${plan.routine.map((r) => `<li><span class="muted" style="font-size:11px;display:block">${esc(r.area)}</span>${esc(r.text)}</li>`).join("")}</ul></div>
+    <div class="card"><h2>Keep doing</h2><div class="sub">Already at a good level – don't lose these</div>
+      ${plan.keep.length ? `<ul class="ins-list">${plan.keep.map((k) => `<li><span class="ic" style="background:${css("--good")}" aria-label="strength">+</span><span>${esc(k.label)}</span><span class="val">${esc(k.value)}</span></li>`).join("")}</ul>` : `<div class="empty" style="padding:12px 0">No stats clearly above the reference values yet.</div>`}</div>
+  </div>
+  <p class="muted" style="font-size:12px;margin:-4px 0 16px">Priorities are ranked by how far a stat is from a rough rule-of-thumb reference (not an official benchmark), and rise when the same problem appears on several maps.</p>`;
+}
+
 const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",
   he_dmg: "HE damage", trade: "trading teammates", traded: "getting traded", survival: "survival", preaim: "crosshair placement" };
 
@@ -475,13 +497,6 @@ function drawCoaching(c) {
 
 const kpi = (k, v, dl) => `<div class="card kpi"><div class="k">${esc(k)}</div><div class="v">${v}</div><div class="d">${dl || "&nbsp;"}</div></div>`;
 
-function insightList(items, good) {
-  if (!items.length) return `<div class="empty">Nothing stands out ${good ? "above" : "below"} the reference values.</div>`;
-  const col = good ? css("--good") : css("--bad");
-  return `<ul class="ins-list">${items.map((i) => `<li><span class="ic" style="background:${col}" aria-label="${good ? "strength" : "weakness"}">${good ? "+" : "−"}</span>
-    <span>${esc(i.label)}<span class="ref">${esc(i.ref)}</span></span><span class="val">${esc(fmtVal(i.value))}${esc(i.unit)}</span></li>`).join("")}</ul>`;
-}
-const fmtVal = (v) => (Math.abs(v) >= 100 ? Math.round(v) : Math.abs(v) < 1 ? v.toFixed(2) : v.toFixed(1));
 
 function skillSection(lt) {
   const r = lt.rating, s = lt.stats || {};
