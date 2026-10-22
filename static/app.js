@@ -168,8 +168,8 @@ async function api(path, opts) {
 
 async function loadHome() {
   const [cfg, tracked] = await Promise.all([api("/api/config"), api("/api/tracked")]);
-  const pill = (ok, name, note) => `<span class="pill"><span class="dot" style="background:${ok ? css("--good") : css("--warn")}"></span>${name}: ${ok ? "key set" : note}</span>`;
-  $("#keyStatus").innerHTML = pill(cfg.faceit, "FACEIT", "no key – FACEIT data disabled") + pill(cfg.leetify, "Leetify", "no key – works, lower rate limit");
+  const pill = (ok, name, note, okText = "key set") => `<span class="pill"><span class="dot" style="background:${ok ? css("--good") : css("--warn")}"></span>${name}: ${ok ? okText : note}</span>`;
+  $("#keyStatus").innerHTML = pill(cfg.faceit, "FACEIT", "no key – FACEIT data disabled", cfg.faceit_builtin ? "built-in key" : "key set") + pill(cfg.leetify, "Leetify", "no key – works, lower rate limit");
   $("#trackedTitle").hidden = !tracked.length;
   $("#tracked").innerHTML = tracked.map((p) => `
     <div class="card" data-id="${esc(p.steam64)}">

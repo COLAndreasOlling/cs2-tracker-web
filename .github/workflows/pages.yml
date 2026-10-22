@@ -25,6 +25,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # Optional: bake a FACEIT *Client side* key into the site so visitors can search by
+      # nickname without entering a key. Set it under Settings -> Secrets -> Actions.
+      - name: Inject FACEIT client key
+        env:
+          FACEIT_CLIENT_KEY: ${{ secrets.FACEIT_CLIENT_KEY }}
+        run: |
+          if [ -n "$FACEIT_CLIENT_KEY" ]; then
+            printf 'window.CS2_CONFIG = { faceitApiKey: %s };\n' "$(jq -Rn --arg k "$FACEIT_CLIENT_KEY" '$k')" > static/config.js
+            echo "FACEIT client key injected"
+          else
+            echo "No FACEIT_CLIENT_KEY secret - visitors enter their own key"
+          fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

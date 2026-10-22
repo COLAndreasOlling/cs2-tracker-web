@@ -26,7 +26,10 @@ const Engine = (() => {
     try { localStorage.setItem(k, JSON.stringify(v)); }
     catch { throw new ApiError(500, "This browser blocked local storage, so keys and history can't be saved."); }
   };
-  const loadConfig = () => ({ faceit_api_key: "", leetify_api_key: "", ...readJSON(CFG_KEY, {}) });
+  const SITE_FACEIT_KEY = (window.CS2_CONFIG && window.CS2_CONFIG.faceitApiKey) || "";
+  const storedConfig = () => ({ faceit_api_key: "", leetify_api_key: "", ...readJSON(CFG_KEY, {}) });
+  // a key saved in this browser wins; otherwise fall back to the site's built-in client key
+  const loadConfig = () => { const c = storedConfig(); return { ...c, faceit_api_key: c.faceit_api_key || SITE_FACEIT_KEY }; };
   const allSnapshots = () => readJSON(SNAP_KEY, {});
 
   /* --------------------------------------------------------------- http --- */
@@ -526,7 +529,11 @@ const Engine = (() => {
     return s;
   }
 
-  const configView = () => { const c = loadConfig(); return { faceit: !!c.faceit_api_key, leetify: !!c.leetify_api_key, locked: false, mode: "browser" }; };
+  const configView = () => {
+    const c = loadConfig();
+    return { faceit: !!c.faceit_api_key, leetify: !!c.leetify_api_key, locked: false, mode: "browser",
+      faceit_builtin: !!SITE_FACEIT_KEY && !storedConfig().faceit_api_key };
+  };
 
   /** Same routes as server.py, answered in the browser. */
   async function handle(path, opts = {}) {
@@ -537,7 +544,7 @@ const Engine = (() => {
       case "GET /api/tracked": return trackedPlayers();
       case "GET /api/config": return configView();
       case "POST /api/config": {
-        const c = loadConfig();
+        const c = storedConfig();
         for (const k of ["faceit_api_key", "leetify_api_key"]) if (typeof body[k] === "string") c[k] = body[k].trim();
         writeJSON(CFG_KEY, c); cache.clear();
         return configView();
