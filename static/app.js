@@ -194,7 +194,8 @@ async function lookup(q) {
   if (!q) return;
   $("#q").value = q === "demo" ? "" : q;
   $("#welcome").hidden = true; $("#report").hidden = true; $("#error").hidden = true; $("#loading").hidden = false;
-  history.replaceState(null, "", "?q=" + encodeURIComponent(q));
+  const tab = new URLSearchParams(location.search).get("tab");
+  history.replaceState(null, "", "?q=" + encodeURIComponent(q) + (tab ? "&tab=" + encodeURIComponent(tab) : ""));
   try {
     const d = await api("/api/player?q=" + encodeURIComponent(q));
     state = { ...state, data: d, page: 0, filters: { source: "", map: "", outcome: "" } };
@@ -238,8 +239,23 @@ function render(d) {
   const score = d.score;
   const ringC = 2 * Math.PI * 52, ringFill = score == null ? 0 : (score / 100) * ringC;
 
+  const integ = Analysis.integrity(d), coach = Analysis.mapCoaching(d);
+  const integDot = integ.available ? { none: "--good", some: "--warn", high: "--bad", flag: "--bad" }[integ.level] : null;
+  const tipCount = coach.available ? coach.maps.reduce((a, m) => a + m.tips.length, 0) : 0;
+  const level = fc.available ? `Lvl ${fmtInt(fc.level)} · ${fmtInt(fc.elo)} ELO` : lt.available && lt.ranks.faceit_elo ? `Lvl ${fmtInt(lt.ranks.faceit)} · ${fmtInt(lt.ranks.faceit_elo)} ELO` : "";
+
   const html = `
   ${notices.length ? `<div class="notice">${notices.join("<br>")}</div>` : ""}
+  <nav class="pagebar" id="pagebar" aria-label="Report sections">
+    <div class="tabs pagetabs" role="tablist">
+      <button role="tab" data-page="summary">Summary</button>
+      <button role="tab" data-page="integrity">Integrity check${integDot ? `<span class="tabdot" style="background:${css(integDot)}" aria-hidden="true"></span>` : ""}</button>
+      <button role="tab" data-page="coaching">Coaching${tipCount ? `<span class="tabcount">${tipCount}</span>` : ""}</button>
+    </div>
+    <div class="pagebar-player" id="pagebarPlayer" aria-hidden="true">
+      ${id.avatar ? `<img src="${esc(id.avatar)}" alt="">` : ""}<b>${esc(id.name)}</b>${level ? `<span class="muted">${esc(level)}</span>` : ""}${score != null ? `<span class="muted">Score ${score}</span>` : ""}
+    </div>
+  </nav>
   <div class="card hero">
     ${id.avatar ? `<img class="avatar" src="${esc(id.avatar)}" alt="">` : `<div class="avatar">${esc((id.name || "?")[0].toUpperCase())}</div>`}
     <div>
@@ -265,6 +281,7 @@ function render(d) {
     </div>
   </div>
 
+  <section class="page" data-page="summary">
   <div class="section-title">Last ${o.matches || 0} matches · all platforms</div>
   <div class="kpis">
     ${kpi("Win rate", pct(o.winrate), delta(f10.winrate, prev.winrate, 1))}
@@ -275,11 +292,6 @@ function render(d) {
     ${kpi("Leetify rating", signed(o.rating, 2), delta(f10.rating, prev.rating, 2))}
     ${kpi("3K+ per match", fmt(o.mk3plus_per_match, 2), delta(f10.mk3plus_per_match, prev.mk3plus_per_match, 2))}
     ${kpi("Streak", d.streaks.current ? `${d.streaks.current}${d.streaks.current_type === "win" ? "W" : "L"}` : "–", `<span class="muted">best ${d.streaks.longest_win}W · worst ${d.streaks.longest_loss}L</span>`)}
-  </div>
-
-  <div class="grid g2">
-    <div class="card"><h2>Strengths</h2><div class="sub">Compared with rough rule-of-thumb reference values</div>${insightList(d.insights.filter((i) => i.type === "strength"), true)}</div>
-    <div class="card"><h2>Areas to improve</h2><div class="sub">Compared with rough rule-of-thumb reference values</div>${insightList(d.insights.filter((i) => i.type === "weakness"), false)}</div>
   </div>
 
   <div class="section-title">Progress</div>
@@ -307,18 +319,29 @@ function render(d) {
   <div class="section-title">Map pool</div>
   <div class="card table-wrap" style="margin-bottom:16px">${mapTable(d.map_pool, fc.available)}</div>
 
-  <div class="section-title">Map coaching</div>
-  <div class="card" id="coachCard" style="margin-bottom:16px"></div>
-
-  <div class="section-title">Integrity check</div>
-  ${integritySection(Analysis.integrity(d))}
-
   <div class="section-title">By platform</div>
   <div class="card table-wrap" style="margin-bottom:16px">${sourceTable(d.by_source)}</div>
 
   <div class="section-title">Match history</div>
   <div class="card" id="matchCard"></div>
-  <p class="muted" style="font-size:12px;margin-top:20px">Data: FACEIT Data API v4 and Leetify Public CS API. Leetify covers Premier, competitive, FACEIT and other sources that it has parsed; FACEIT-only matches Leetify hasn't parsed are added from FACEIT. Ratings and reference thresholds are indicative, not official.</p>`;
+  <p class="muted" style="font-size:12px;margin-top:20px">Data: FACEIT Data API v4 and Leetify Public CS API. Leetify covers Premier, competitive, FACEIT and other sources that it has parsed; FACEIT-only matches Leetify hasn't parsed are added from FACEIT. Ratings and reference thresholds are indicative, not official.</p>
+  </section>
+
+  <section class="page" data-page="integrity" hidden>
+    <div class="section-title">Integrity check</div>
+    ${integritySection(integ)}
+  </section>
+
+  <section class="page" data-page="coaching" hidden>
+    <div class="section-title">Overall strengths &amp; areas to improve</div>
+  <div class="grid g2">
+    <div class="card"><h2>Strengths</h2><div class="sub">Compared with rough rule-of-thumb reference values</div>${insightList(d.insights.filter((i) => i.type === "strength"), true)}</div>
+    <div class="card"><h2>Areas to improve</h2><div class="sub">Compared with rough rule-of-thumb reference values</div>${insightList(d.insights.filter((i) => i.type === "weakness"), false)}</div>
+  </div>
+
+    <div class="section-title">Map coaching</div>
+    <div class="card" id="coachCard" style="margin-bottom:16px"></div>
+  </section>`;
 
   $("#report").innerHTML = html;
   $("#report").hidden = false;
@@ -326,8 +349,44 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawProgress(d); drawPremier(d); drawForm(d); drawMatches(d); drawCoaching(Analysis.mapCoaching(d));
+  drawMatches(d); drawCoaching(coach);
+  setupPages(d);
 }
+
+/* -------------------------------------------------------------- pages --- */
+const PAGES = ["summary", "integrity", "coaching"];
+
+function setupPages(d) {
+  const bar = $("#pagebar");
+  const show = (page, fromClick) => {
+    state.page = page;
+    document.querySelectorAll("#report .page").forEach((p) => (p.hidden = p.dataset.page !== page));
+    bar.querySelectorAll("[data-page]").forEach((b) => { const on = b.dataset.page === page; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
+    if (page === "summary") { drawProgress(d); drawPremier(d); drawForm(d); } // charts need a visible width
+    const u = new URL(location.href); u.searchParams.set("tab", page); history.replaceState(null, "", u);
+    // when the bar is already stuck, start the new page at its top instead of mid-page
+    if (fromClick && bar.classList.contains("stuck"))
+      window.scrollTo({ top: window.scrollY + $(".hero").getBoundingClientRect().bottom - bar.getBoundingClientRect().bottom + 1 });
+  };
+  bar.querySelectorAll("[data-page]").forEach((b) => (b.onclick = () => show(b.dataset.page, true)));
+  const fromUrl = new URLSearchParams(location.search).get("tab");
+  show(PAGES.includes(fromUrl) ? fromUrl : PAGES.includes(state.page) ? state.page : "summary", false);
+
+  syncPageBar();
+}
+
+// Keeps the sticky page bar directly under the (sometimes wrapping) top bar, and shows the
+// compact player strip once the player card has scrolled under the bar.
+function syncPageBar() {
+  document.documentElement.style.setProperty("--topbar-h", `${Math.ceil($(".topbar").getBoundingClientRect().height)}px`);
+  const bar = $("#pagebar"), hero = $("#report .hero");
+  if (!bar || !hero || $("#report").hidden) return;
+  const under = hero.getBoundingClientRect().bottom <= bar.getBoundingClientRect().bottom;
+  bar.classList.toggle("stuck", under);
+  $("#pagebarPlayer").classList.toggle("show", under);
+}
+addEventListener("scroll", syncPageBar, { passive: true });
+addEventListener("resize", syncPageBar);
 
 /* ------------------------------------------------- integrity & coaching --- */
 const STATUS = {
@@ -646,7 +705,7 @@ $("#saveKeys").onclick = async (e) => {
   catch (err) { alert(err.message); return; }
   $("#settings").close(); loadHome();
 };
-let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => state.data && !$("#report").hidden && (drawProgress(state.data), drawPremier(state.data), drawForm(state.data)), 150); });
+let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => state.data && !$("#report").hidden && state.page === "summary" && (drawProgress(state.data), drawPremier(state.data), drawForm(state.data)), 150); });
 
 loadHome();
 const q0 = new URLSearchParams(location.search).get("q");

@@ -37,6 +37,9 @@ jobs:
           jq -n --arg c "$FACEIT_CLIENT_KEY" --arg l "$FACEIT_KEY_LOCKED" '{faceitApiKey: $c, faceitKeyLocked: $l}' \
             | { printf 'window.CS2_CONFIG = '; cat; printf ';\n'; } > static/config.js
           echo "client key: $([ -n "$FACEIT_CLIENT_KEY" ] && echo set || echo none) | locked key: $([ -n "$FACEIT_KEY_LOCKED" ] && echo set || echo none)"
+      # Cache-busting: each deploy gets new asset URLs, so browsers load the update without Ctrl+F5.
+      - name: Stamp asset version
+        run: sed -i "s/__BUILD__/${GITHUB_SHA::8}/g" static/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
