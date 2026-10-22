@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CS2 Tracker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='11' fill='none' stroke='%23eb6834' stroke-width='3'/><path d='M16 2v8M16 22v8M2 16h8M22 16h8' stroke='%23eb6834' stroke-width='3'/></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><circle cx="16" cy="16" r="10" fill="none" stroke="currentColor" stroke-width="3"/><path d="M16 2v8M16 22v8M2 16h8M22 16h8" stroke="currentColor" stroke-width="3"/></svg><span>CS2 Tracker</span></div>
+  <form id="search" class="search" autocomplete="off">
+    <input id="q" type="search" placeholder="Steam64 ID, Steam profile URL, FACEIT nickname or URL" aria-label="Player">
+    <button type="submit" class="btn primary">Analyze</button>
+  </form>
+  <div class="actions">
+    <button class="btn ghost" id="demoBtn" title="Load synthetic demo data">Demo</button>
+    <button class="btn ghost" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+    <button class="btn ghost" id="settingsBtn" title="API keys" aria-label="Settings">⚙</button>
+  </div>
+</header>
+
+<main id="main">
+  <section id="welcome" class="welcome">
+    <h1>One summary of a CS2 player's performance</h1>
+    <p>Pulls ranks, lifetime stats and match history from <b>FACEIT</b> and aim, positioning, utility and per-match ratings from <b>Leetify</b>, merges them, and saves a snapshot on every lookup so you can track progress over time.</p>
+    <div id="keyStatus" class="keystatus"></div>
+    <h3 id="trackedTitle" hidden>Tracked players</h3>
+    <div id="tracked" class="tracked"></div>
+  </section>
+  <div id="loading" class="loading" hidden><div class="spinner"></div><span>Fetching FACEIT &amp; Leetify…</span></div>
+  <div id="error" class="error" hidden></div>
+  <div id="report" hidden></div>
+</main>
+
+<dialog id="settings">
+  <form method="dialog" id="settingsForm">
+    <h2>API keys</h2>
+    <p class="muted" id="keysLocal">Stored only on this machine in <code>data/config.json</code>.</p>
+    <p class="muted" id="keysBrowser" hidden>Stored only in this browser – they're never part of the website itself. Enter them once on each device you use.</p>
+    <p class="notice" id="keysLocked" hidden>This server reads its API keys from environment variables (e.g. in the Render dashboard → Environment). Change them there.</p>
+    <div id="keyInputs">
+    <label>FACEIT Data API key <span class="muted">(required for FACEIT data)</span>
+      <input id="faceitKey" type="password" placeholder="Leave empty to keep current key"></label>
+    <p class="hint">Free: <a href="https://developers.faceit.com" target="_blank" rel="noopener">developers.faceit.com</a> → App Studio → create app → API keys → <i id="faceitKeyType">Server side</i>.</p>
+    <label>Leetify API key <span class="muted">(optional, raises rate limit)</span>
+      <input id="leetifyKey" type="password" placeholder="Leave empty to keep current key"></label>
+    <p class="hint">Free: <a href="https://leetify.com/app/developer" target="_blank" rel="noopener">leetify.com/app/developer</a></p>
+    </div>
+    <div id="historyTools" hidden>
+      <h2 style="margin-top:22px">Progress history</h2>
+      <p class="hint">History is saved in this browser. Export it to back it up or move it to another device, then import it there – snapshots are merged, nothing is overwritten.</p>
+      <div class="row" style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn" id="exportHistory" type="button">Export history</button>
+        <label class="btn" style="margin:0;font-weight:400">Import history<input id="importFile" type="file" accept="application/json,.json" hidden></label>
+      </div>
+    </div>
+    <div class="row end"><button class="btn ghost" value="cancel">Cancel</button><button class="btn primary" id="saveKeys" value="save">Save</button></div>
+  </form>
+</dialog>
+
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

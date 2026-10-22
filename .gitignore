@@ -1,0 +1,5 @@
+# local secrets and per-user data
+data/config.json
+data/snapshots/*.json
+__pycache__/
+*.pyc

@@ -1,0 +1,30 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# In Render: New + -> Blueprint -> pick this repo. You'll be asked for the secret values.
+services:
+  - type: web
+    name: cs2-tracker
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: echo "no dependencies to install"
+    startCommand: python server.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: LOCK_CONFIG
+        value: "1"
+      - key: GITHUB_REPO
+        value: COLAndreasOlling/cs2-tracker
+      - key: GITHUB_BRANCH
+        value: data
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: APP_PASSWORD      # the password you'll type to open the site
+        sync: false
+      - key: FACEIT_API_KEY
+        sync: false
+      - key: LEETIFY_API_KEY   # optional; leave blank if you don't have one
+        sync: false
+      - key: GITHUB_TOKEN      # fine-grained token: this repo only, Contents read/write
+        sync: false
