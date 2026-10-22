@@ -15,6 +15,7 @@
     <button type="submit" class="btn primary">Analyze</button>
   </form>
   <div class="actions">
+    <button class="btn ghost" id="authBtn" hidden>Sign in</button>
     <button class="btn ghost" id="demoBtn" title="Load synthetic demo data">Demo</button>
     <button class="btn ghost" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
     <button class="btn ghost" id="settingsBtn" title="API keys" aria-label="Settings">⚙</button>
@@ -48,6 +49,20 @@
       <input id="leetifyKey" type="password" placeholder="Leave empty to keep current key"></label>
     <p class="hint">Free: <a href="https://leetify.com/app/developer" target="_blank" rel="noopener">leetify.com/app/developer</a></p>
     </div>
+    <div id="lockTools" hidden>
+      <h2 style="margin-top:22px">Lock a key for this site</h2>
+      <p class="hint">Encrypts a FACEIT key (Server side is fine) with a password, right here in your browser – nothing is sent anywhere. Add the result to the GitHub repo as the secret <code>FACEIT_KEY_LOCKED</code> and redeploy; then anyone who knows the password can <b>Sign in</b> to use the key, on any device.</p>
+      <label>FACEIT key to lock <input id="lockKeyInput" type="password" autocomplete="off"></label>
+      <label>Password <span class="muted">(at least 14 characters – a phrase of 4–5 random words is ideal)</span>
+        <input id="lockPw1" type="password" autocomplete="new-password"></label>
+      <label>Repeat password <input id="lockPw2" type="password" autocomplete="new-password"></label>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="lockBtn" type="button">Lock key</button></div>
+      <div id="lockOut" hidden>
+        <label>Locked key – copy this into the <code>FACEIT_KEY_LOCKED</code> secret
+          <textarea id="lockResult" readonly rows="4" style="display:block;width:100%;margin-top:6px;font:12px/1.4 monospace;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--text-primary);word-break:break-all"></textarea></label>
+        <div style="display:flex;gap:8px;margin-top:8px"><button class="btn" id="copyLock" type="button">Copy</button></div>
+      </div>
+    </div>
     <div id="historyTools" hidden>
       <h2 style="margin-top:22px">Progress history</h2>
       <p class="hint">History is saved in this browser. Export it to back it up or move it to another device, then import it there – snapshots are merged, nothing is overwritten.</p>
@@ -57,6 +72,17 @@
       </div>
     </div>
     <div class="row end"><button class="btn ghost" value="cancel">Cancel</button><button class="btn primary" id="saveKeys" value="save">Save</button></div>
+  </form>
+</dialog>
+
+<dialog id="signin">
+  <form id="signinForm">
+    <h2>Sign in</h2>
+    <p class="muted">Unlocks this site's FACEIT key in this browser so you can search by FACEIT username.</p>
+    <label>Password <input id="signinPw" type="password" autocomplete="current-password" required></label>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:400"><input id="signinRemember" type="checkbox" checked style="width:auto;margin:0"> Remember on this device</label>
+    <p class="error" id="signinErr" hidden style="margin:12px 0 0"></p>
+    <div class="row end"><button class="btn ghost" type="button" id="signinCancel">Cancel</button><button class="btn primary" type="submit" id="signinGo">Sign in</button></div>
   </form>
 </dialog>
 

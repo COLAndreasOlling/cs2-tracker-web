@@ -169,7 +169,10 @@ async function api(path, opts) {
 async function loadHome() {
   const [cfg, tracked] = await Promise.all([api("/api/config"), api("/api/tracked")]);
   const pill = (ok, name, note, okText = "key set") => `<span class="pill"><span class="dot" style="background:${ok ? css("--good") : css("--warn")}"></span>${name}: ${ok ? okText : note}</span>`;
-  $("#keyStatus").innerHTML = pill(cfg.faceit, "FACEIT", "no key – FACEIT data disabled", cfg.faceit_builtin ? "built-in key" : "key set") + pill(cfg.leetify, "Leetify", "no key – works, lower rate limit");
+  updateAuth(cfg);
+  const faceitOk = cfg.signed_in ? "signed in" : cfg.faceit_builtin ? "built-in key" : "key set";
+  const faceitMissing = cfg.faceit_lock ? "sign in to use FACEIT" : "no key – FACEIT data disabled";
+  $("#keyStatus").innerHTML = pill(cfg.faceit, "FACEIT", faceitMissing, faceitOk) + pill(cfg.leetify, "Leetify", "no key – works, lower rate limit");
   $("#trackedTitle").hidden = !tracked.length;
   $("#tracked").innerHTML = tracked.map((p) => `
     <div class="card" data-id="${esc(p.steam64)}">
@@ -503,7 +506,47 @@ $("#settingsBtn").onclick = async () => {
   $("#keyInputs").hidden = !!cfg.locked; $("#saveKeys").hidden = !!cfg.locked;
   $("#faceitKeyType").textContent = browser ? "new key (Server side works – it stays in this browser)" : "Server side";
   $("#historyTools").hidden = !browser;
+  $("#lockTools").hidden = !browser;
+  $("#lockOut").hidden = true; $("#lockKeyInput").value = $("#lockPw1").value = $("#lockPw2").value = "";
   $("#settings").showModal();
+};
+/* sign in: unlock the site's password-locked FACEIT key in this browser */
+function updateAuth(cfg) {
+  $("#authBtn").hidden = !cfg.faceit_lock;
+  $("#authBtn").textContent = cfg.signed_in ? "Sign out" : "Sign in";
+  $("#authBtn").dataset.signedIn = cfg.signed_in ? "1" : "";
+}
+const refreshAfterAuth = () => { loadHome(); const q = new URLSearchParams(location.search).get("q"); if (q && !$("#report").hidden) lookup(q); };
+$("#authBtn").onclick = () => {
+  if ($("#authBtn").dataset.signedIn) { Engine.signOut(); refreshAfterAuth(); return; }
+  $("#signinPw").value = ""; $("#signinErr").hidden = true; $("#signin").showModal(); $("#signinPw").focus();
+};
+$("#signinCancel").onclick = () => $("#signin").close();
+$("#signinForm").onsubmit = async (e) => {
+  e.preventDefault();
+  $("#signinGo").disabled = true; $("#signinGo").textContent = "Checking…"; $("#signinErr").hidden = true;
+  try {
+    await Engine.unlock($("#signinPw").value, $("#signinRemember").checked);
+    $("#signin").close(); refreshAfterAuth();
+  } catch (err) { $("#signinErr").textContent = err.message; $("#signinErr").hidden = false; }
+  finally { $("#signinGo").disabled = false; $("#signinGo").textContent = "Sign in"; $("#signinPw").value = ""; }
+};
+$("#lockBtn").onclick = async () => {
+  const key = $("#lockKeyInput").value.trim(), p1 = $("#lockPw1").value, p2 = $("#lockPw2").value;
+  if (!key) return alert("Paste the FACEIT key to lock.");
+  if (p1.length < 14) return alert("Use a password of at least 14 characters – e.g. 4–5 random words.");
+  if (p1 !== p2) return alert("The passwords don't match.");
+  $("#lockBtn").disabled = true; $("#lockBtn").textContent = "Locking…";
+  try {
+    $("#lockResult").value = await Engine.lockKey(key, p1);
+    $("#lockOut").hidden = false;
+    $("#lockKeyInput").value = $("#lockPw1").value = $("#lockPw2").value = "";
+  } finally { $("#lockBtn").disabled = false; $("#lockBtn").textContent = "Lock key"; }
+};
+$("#copyLock").onclick = async () => {
+  try { await navigator.clipboard.writeText($("#lockResult").value); $("#copyLock").textContent = "Copied"; }
+  catch { $("#lockResult").select(); $("#copyLock").textContent = "Press Ctrl+C"; }
+  setTimeout(() => ($("#copyLock").textContent = "Copy"), 2000);
 };
 $("#exportHistory").onclick = (e) => {
   e.preventDefault();

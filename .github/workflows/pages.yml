@@ -25,19 +25,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      # Optional: bake a FACEIT *Client side* key into the site so visitors can search by
-      # nickname without entering a key. Set it under Settings -> Secrets -> Actions.
-      # NEVER use a Server side key here: it would be public in the deployed site.
-      - name: Inject FACEIT client key
+      # Optional FACEIT keys from repo secrets (Settings -> Secrets and variables -> Actions):
+      #   FACEIT_KEY_LOCKED  - a key encrypted with a password ("Lock a key" in the app's Settings);
+      #                        safe for a Server side key, visitors must sign in to use it.
+      #   FACEIT_CLIENT_KEY  - a plain *Client side* key anyone can use. NEVER a Server side key.
+      - name: Inject FACEIT keys
         env:
           FACEIT_CLIENT_KEY: ${{ secrets.FACEIT_CLIENT_KEY }}
+          FACEIT_KEY_LOCKED: ${{ secrets.FACEIT_KEY_LOCKED }}
         run: |
-          if [ -n "$FACEIT_CLIENT_KEY" ]; then
-            printf 'window.CS2_CONFIG = { faceitApiKey: %s };\n' "$(jq -Rn --arg k "$FACEIT_CLIENT_KEY" '$k')" > static/config.js
-            echo "FACEIT client key injected"
-          else
-            echo "No FACEIT_CLIENT_KEY secret - visitors enter their own key"
-          fi
+          jq -n --arg c "$FACEIT_CLIENT_KEY" --arg l "$FACEIT_KEY_LOCKED" '{faceitApiKey: $c, faceitKeyLocked: $l}' \
+            | { printf 'window.CS2_CONFIG = '; cat; printf ';\n'; } > static/config.js
+          echo "client key: $([ -n "$FACEIT_CLIENT_KEY" ] && echo set || echo none) | locked key: $([ -n "$FACEIT_KEY_LOCKED" ] && echo set || echo none)"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

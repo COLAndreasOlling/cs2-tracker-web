@@ -27,10 +27,59 @@ const Engine = (() => {
     catch { throw new ApiError(500, "This browser blocked local storage, so keys and history can't be saved."); }
   };
   const SITE_FACEIT_KEY = (window.CS2_CONFIG && window.CS2_CONFIG.faceitApiKey) || "";
+  const SITE_LOCKED_KEY = (window.CS2_CONFIG && window.CS2_CONFIG.faceitKeyLocked) || "";
+  const UNLOCKED_KEY = "cs2tracker.unlocked";
   const storedConfig = () => ({ faceit_api_key: "", leetify_api_key: "", ...readJSON(CFG_KEY, {}) });
-  // a key saved in this browser wins; otherwise fall back to the site's built-in client key
-  const loadConfig = () => { const c = storedConfig(); return { ...c, faceit_api_key: c.faceit_api_key || SITE_FACEIT_KEY }; };
+  // the key unlocked by signing in lives in localStorage ("remember") or sessionStorage (this tab only)
+  const unlockedKey = () => {
+    for (const s of [localStorage, sessionStorage]) { try { const k = s.getItem(UNLOCKED_KEY); if (k) return k; } catch {} }
+    return "";
+  };
+  // a key saved in this browser wins, then a signed-in (unlocked) key, then the site's built-in client key
+  const loadConfig = () => { const c = storedConfig(); return { ...c, faceit_api_key: c.faceit_api_key || unlockedKey() || SITE_FACEIT_KEY }; };
   const allSnapshots = () => readJSON(SNAP_KEY, {});
+
+  /* ------------------------------------------------- password-locked key --- */
+  // The site can carry a FACEIT key encrypted with a password (AES-256-GCM, key derived with
+  // PBKDF2-SHA256). Only someone who knows the password can decrypt and use it.
+  const LOCK_PREFIX = "cs2k1.";
+  const PBKDF2_ROUNDS = 600000;
+  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+  async function deriveKey(password, salt, rounds) {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: rounds, hash: "SHA-256" }, base,
+      { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+
+  async function lockKey(apiKey, password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+    const aes = await deriveKey(password, salt, PBKDF2_ROUNDS);
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aes, new TextEncoder().encode(apiKey.trim()));
+    return LOCK_PREFIX + btoa(JSON.stringify({ n: PBKDF2_ROUNDS, s: b64(salt), i: b64(iv), c: b64(ct) }));
+  }
+
+  async function unlock(password, remember) {
+    if (!SITE_LOCKED_KEY.startsWith(LOCK_PREFIX)) throw new Error("This site has no locked FACEIT key.");
+    let p;
+    try { p = JSON.parse(atob(SITE_LOCKED_KEY.slice(LOCK_PREFIX.length))); }
+    catch { throw new Error("The site's locked key is damaged – lock it again and update the FACEIT_KEY_LOCKED secret."); }
+    let key;
+    try {
+      const aes = await deriveKey(password, unb64(p.s), p.n);
+      key = new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(p.i) }, aes, unb64(p.c)));
+    } catch { throw new Error("Wrong password."); }
+    signOut();
+    try { (remember ? localStorage : sessionStorage).setItem(UNLOCKED_KEY, key); }
+    catch { throw new Error("This browser blocked storage, so the sign-in can't be kept."); }
+    cache.clear();
+  }
+
+  function signOut() {
+    for (const s of [localStorage, sessionStorage]) { try { s.removeItem(UNLOCKED_KEY); } catch {} }
+    cache.clear();
+  }
 
   /* --------------------------------------------------------------- http --- */
   async function httpGet(url, headers = {}) {
@@ -83,6 +132,7 @@ const Engine = (() => {
     if (/steamcommunity\.com\/id\//i.test(q))
       throw new ApiError(400, "Custom Steam URLs (/id/name) can't be resolved in the web version. Use the Steam64 ID (the 7656119… number), e.g. from steamid.io, or a FACEIT nickname.");
     if (cfg.faceit_api_key) return { steam64: null, faceit_nickname: q.replace(/^@/, "") };
+    if (SITE_LOCKED_KEY) throw new ApiError(401, "Sign in (top right) to search by FACEIT nickname. Without signing in, search by Steam64 ID (the 7656119… number).");
     throw new ApiError(400, `To search by FACEIT nickname, add your FACEIT API key in ⚙ Settings (keys are saved per browser, so add it once on each device). Without a key, search by Steam64 ID (the 7656119… number).`);
   }
 
@@ -104,7 +154,7 @@ const Engine = (() => {
 
   async function fetchFaceit(ident, cfg) {
     const key = cfg.faceit_api_key;
-    if (!key) return { available: false, reason: "No FACEIT API key set (⚙ Settings)." };
+    if (!key) return { available: false, reason: SITE_LOCKED_KEY ? "Sign in (top right) to include FACEIT data." : "No FACEIT API key set (⚙ Settings)." };
     let player;
     try {
       player = ident.faceit_nickname
@@ -531,8 +581,10 @@ const Engine = (() => {
 
   const configView = () => {
     const c = loadConfig();
+    const own = storedConfig().faceit_api_key, signedIn = !!unlockedKey();
     return { faceit: !!c.faceit_api_key, leetify: !!c.leetify_api_key, locked: false, mode: "browser",
-      faceit_builtin: !!SITE_FACEIT_KEY && !storedConfig().faceit_api_key };
+      faceit_builtin: !!SITE_FACEIT_KEY && !own && !signedIn,
+      faceit_lock: !!SITE_LOCKED_KEY, signed_in: signedIn, faceit_own: !!own };
   };
 
   /** Same routes as server.py, answered in the browser. */
@@ -578,5 +630,5 @@ const Engine = (() => {
     return added;
   }
 
-  return { handle, exportHistory, importHistory };
+  return { handle, exportHistory, importHistory, lockKey, unlock, signOut };
 })();
