@@ -592,6 +592,13 @@ function drawForm(d) {
   });
 }
 
+/** FACEIT matchroom for a FACEIT match (Leetify carries FACEIT's match id; FACEIT-only matches use it as their id). */
+function roomUrl(m, d) {
+  if (m.source !== "faceit" || d.demo) return null;
+  const id = m.faceit_id || m.id;
+  return id && /^1-[0-9a-f-]{36}$/i.test(id) ? `https://www.faceit.com/en/cs2/room/${encodeURIComponent(id)}` : null;
+}
+
 function drawMatches(d) {
   const f = state.filters, per = 20;
   const sources = [...new Set(d.matches.map((m) => m.source))].sort(), maps = [...new Set(d.matches.map((m) => m.map))].sort();
@@ -607,11 +614,12 @@ function drawMatches(d) {
       <select data-f="map">${opt(maps, f.map, "All maps")}</select>
       <select data-f="outcome">${opt(["win", "loss", "tie"], f.outcome, "All results")}</select></div>
       <div class="muted" style="font-size:12px">${list.length} matches · ${agg}</div></div>
-    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Platform</th><th>Map</th><th>Result</th><th class="n">Score</th><th class="n">K</th><th class="n">D</th><th class="n">A</th><th class="n">K/D</th><th class="n">ADR</th><th class="n">HS %</th><th class="n">Rating</th><th class="n">Rank</th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>Date</th><th>Platform</th><th>Map</th><th>Result</th><th class="n">Score</th><th class="n">K</th><th class="n">D</th><th class="n">A</th><th class="n">K/D</th><th class="n">ADR</th><th class="n">HS %</th><th class="n">Rating</th><th class="n">Rank</th><th>Matchroom</th></tr></thead><tbody>
     ${rows.map((m) => `<tr><td>${esc(dateLong(m.date))}</td><td><span class="src">${esc(m.source)}</span></td><td>${esc(m.map)}</td>
       <td>${m.outcome ? `<span class="badge ${m.outcome}">${m.outcome[0].toUpperCase()}</span>` : "–"}</td><td class="n">${esc(m.score || "–")}</td>
       <td class="n">${m.kills}</td><td class="n">${m.deaths}</td><td class="n">${m.assists}</td><td class="n">${fmt(m.deaths ? m.kills / m.deaths : m.kills, 2)}</td>
-      <td class="n">${fmt(m.adr, 1)}</td><td class="n">${pct(m.hs_pct, 0)}</td><td class="n">${signed(m.rating, 2)}</td><td class="n">${!m.rank ? "–" : m.source === "faceit" && m.rank <= 10 ? `Lvl ${m.rank}` : fmtInt(m.rank)}</td></tr>`).join("") || `<tr><td colspan="13" class="empty">No matches for this filter.</td></tr>`}
+      <td class="n">${fmt(m.adr, 1)}</td><td class="n">${pct(m.hs_pct, 0)}</td><td class="n">${signed(m.rating, 2)}</td><td class="n">${!m.rank ? "–" : m.source === "faceit" && m.rank <= 10 ? `Lvl ${m.rank}` : fmtInt(m.rank)}</td>
+      <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener" title="Open the FACEIT matchroom">FACEIT ↗</a>` : `<span class="muted">–</span>`}</td></tr>`).join("") || `<tr><td colspan="14" class="empty">No matches for this filter.</td></tr>`}
     </tbody></table></div>
     <div class="pager"><button class="btn small" id="prevP" ${state.page === 0 ? "disabled" : ""}>← Newer</button><span>Page ${state.page + 1} of ${pages}</span><button class="btn small" id="nextP" ${state.page >= pages - 1 ? "disabled" : ""}>Older →</button></div>`;
   $("#matchCard").querySelectorAll("select").forEach((s) => (s.onchange = () => { state.filters[s.dataset.f] = s.value; state.page = 0; drawMatches(d); }));
