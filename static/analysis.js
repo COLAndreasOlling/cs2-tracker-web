@@ -26,7 +26,7 @@ const Analysis = (() => {
 
   function integrity(d) {
     const lt = d.leetify || {}, st = lt.stats || {}, items = [];
-    const add = (status, label, value, ref, detail) => items.push({ status, label, value, ref, detail });
+    const add = (status, label, value, ref, detail, matches) => items.push({ status, label, value, ref, detail, matches });
     if (!lt.available) return { available: false, reason: "Needs Leetify data (aim statistics come from Leetify)." };
 
     // 1. bans recorded on the player's own accounts
@@ -49,7 +49,8 @@ const Analysis = (() => {
       const share = extreme.length / ms.length;
       add(share > T.extremeShare ? "outlier" : extreme.length ? "note" : "ok", "Matches with extreme aim values",
         `${extreme.length} of ${ms.length}`, `preaim < ${T.matchPreaim}° or reaction < ${T.matchReaction} ms; outlier above ${Math.round(T.extremeShare * 100)}% of matches`,
-        extreme.length ? `Maps: ${[...new Set(extreme.map((m) => m.map))].join(", ")}` : null);
+        null, extreme.map((m) => ({ ...m, extremePreaim: m.aim_preaim != null && m.aim_preaim < T.matchPreaim,
+          extremeReaction: m.reaction_ms != null && m.reaction_ms < T.matchReaction })));
     }
 
     // 6. sudden improvement: recent matches vs older ones (chronological order is newest first)

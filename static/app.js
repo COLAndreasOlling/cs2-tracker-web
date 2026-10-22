@@ -329,7 +329,7 @@ function render(d) {
 
   <section class="page" data-page="integrity" hidden>
     <div class="section-title">Integrity check</div>
-    ${integritySection(integ)}
+    ${integritySection(integ, d)}
   </section>
 
   <section class="page" data-page="coaching" hidden>
@@ -396,7 +396,7 @@ const STATUS = {
   flag: { icon: "✕", label: "Ban", color: "--bad" },
 };
 
-function integritySection(r) {
+function integritySection(r, d) {
   if (!r.available) return `<div class="card empty">${esc(r.reason)}</div>`;
   const head = { none: ["--good", "No anomalies"], some: ["--warn", "Some unusual values"], high: ["--bad", "Several outliers"], flag: ["--bad", "Ban on record"] }[r.level];
   return `<div class="card" style="margin-bottom:16px">
@@ -408,10 +408,25 @@ function integritySection(r) {
       const s = STATUS[i.status];
       return `<li><span class="ic" style="background:${css(s.color)}" aria-label="${s.label}" title="${s.label}">${s.icon}</span>
         <span>${esc(i.label)} <span class="muted" style="font-size:11px">· ${s.label}</span><span class="ref">${esc(i.ref)}${i.detail ? ` · ${esc(i.detail)}` : ""}</span></span>
-        <span class="val">${esc(i.value)}</span></li>`;
+        <span class="val">${esc(i.value)}</span>${i.matches?.length ? extremeMatches(i.matches, d) : ""}</li>`;
     }).join("")}</ul>
     ${r.context ? `<p class="muted" style="font-size:12px;margin:12px 0 0">${esc(r.context)}</p>` : ""}
   </div>`;
+}
+
+/** The individual matches behind "Matches with extreme aim values", with FACEIT matchroom links. */
+function extremeMatches(ms, d) {
+  const cell = (v, extreme, f) => (v == null ? "–" : extreme ? `<b class="down" title="Extreme value">▲ ${f(v)}</b>` : f(v));
+  return `<div class="table-wrap" style="grid-column:1/-1;margin-top:6px"><table>
+    <thead><tr><th>Date</th><th>Platform</th><th>Map</th><th>Result</th><th class="n">K / D</th><th class="n">Preaim</th><th class="n">Reaction</th><th class="n">Leetify rating</th><th>Matchroom</th></tr></thead><tbody>
+    ${ms.map((m) => `<tr><td>${esc(dateLong(m.date))}</td><td><span class="src">${esc(m.source)}</span></td><td>${esc(m.map)}</td>
+      <td>${m.outcome ? `<span class="badge ${m.outcome}">${m.outcome[0].toUpperCase()}</span> ${esc(m.score || "")}` : "–"}</td>
+      <td class="n">${m.kills} / ${m.deaths}</td>
+      <td class="n">${cell(m.aim_preaim, m.extremePreaim, (v) => `${v.toFixed(1)}°`)}</td>
+      <td class="n">${cell(m.reaction_ms, m.extremeReaction, (v) => `${Math.round(v)} ms`)}</td>
+      <td class="n">${signed(m.rating, 2)}</td>
+      <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener" title="Open the FACEIT matchroom">FACEIT ↗</a>` : `<span class="muted" title="Matchrooms exist only for FACEIT matches">–</span>`}</td></tr>`).join("")}
+  </tbody></table></div>`;
 }
 
 const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",
