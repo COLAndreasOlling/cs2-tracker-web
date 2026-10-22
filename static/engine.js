@@ -79,21 +79,39 @@ const Engine = (() => {
     if (m) return { steam64: null, faceit_nickname: decodeURIComponent(m[1]) };
     if (/steamcommunity\.com\/id\//i.test(q))
       throw new ApiError(400, "Custom Steam URLs (/id/name) can't be resolved in the web version. Use the Steam64 ID (the 7656119… number), e.g. from steamid.io, or a FACEIT nickname.");
-    if (cfg.faceit_api_key) return { steam64: null, faceit_nickname: q };
-    throw new ApiError(400, "Enter a Steam64 ID or Steam /profiles/ URL – or add a FACEIT key in Settings to search by FACEIT nickname.");
+    if (cfg.faceit_api_key) return { steam64: null, faceit_nickname: q.replace(/^@/, "") };
+    throw new ApiError(400, `To search by FACEIT nickname, add your FACEIT API key in ⚙ Settings (keys are saved per browser, so add it once on each device). Without a key, search by Steam64 ID (the 7656119… number).`);
   }
 
   /* ------------------------------------------------------------- FACEIT --- */
+  /** Exact nickname lookup is case-sensitive; fall back to FACEIT's search, which isn't. */
+  async function findFaceitPlayer(nick, key) {
+    try { return await faceitGet("/players", key, { nickname: nick }); }
+    catch (e) { if (e.status !== 404) throw e; }
+    const items = (await faceitGet("/search/players", key, { nickname: nick, game: "cs2", limit: 20 })).items || [];
+    const hit = items.find((p) => (p.nickname || "").toLowerCase() === nick.toLowerCase()) || (items.length === 1 ? items[0] : null);
+    if (!hit) {
+      const msg = items.length
+        ? `No FACEIT player named "${nick}". Did you mean: ${items.slice(0, 5).map((p) => p.nickname).join(", ")}?`
+        : `No FACEIT player named "${nick}" with CS2 on their account.`;
+      throw Object.assign(new ApiError(404, msg), { friendly: true });
+    }
+    return faceitGet(`/players/${hit.player_id}`, key);
+  }
+
   async function fetchFaceit(ident, cfg) {
     const key = cfg.faceit_api_key;
     if (!key) return { available: false, reason: "No FACEIT API key set (⚙ Settings)." };
     let player;
     try {
       player = ident.faceit_nickname
-        ? await faceitGet("/players", key, { nickname: ident.faceit_nickname })
+        ? await findFaceitPlayer(ident.faceit_nickname, key)
         : await faceitGet("/players", key, { game: "cs2", game_player_id: ident.steam64 });
     } catch (e) {
-      const reason = e.status === 404 ? "No FACEIT account found." : [401, 403].includes(e.status) ? "FACEIT rejected the API key." : e.message;
+      const reason = e.friendly ? e.message
+        : e.status === 404 ? "No FACEIT account found for this Steam account."
+        : [401, 403].includes(e.status) ? "FACEIT rejected the API key. On this website use a \"Client side\" key from FACEIT App Studio, and check it isn't restricted to a different domain."
+        : e.message;
       return { available: false, reason };
     }
     const pid = player.player_id;
@@ -500,7 +518,7 @@ const Engine = (() => {
     const ident = resolveQuery(q, cfg);
     const fc = normalizeFaceit(await fetchFaceit(ident, cfg));
     const steam64 = ident.steam64 || (fc.available ? fc.steam64 : null);
-    if (!steam64) throw new ApiError(404, fc.reason || "Could not determine the player's Steam64 ID.");
+    if (!steam64) throw new ApiError(404, fc.available ? `FACEIT account "${fc.nickname}" has no CS2 profile linked.` : fc.reason || "Could not determine the player's Steam64 ID.");
     const lt = normalizeLeetify(await fetchLeetify(steam64, cfg), steam64);
     if (!fc.available && !lt.available) throw new ApiError(404, `No data. FACEIT: ${fc.reason}  Leetify: ${lt.reason}`);
     const s = buildSummary(fc, lt, steam64);

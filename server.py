@@ -181,7 +181,7 @@ def resolve_query(q, cfg):
     m = re.search(r"steamcommunity\.com/id/([^/?#]+)", q, re.I)
     vanity = m.group(1) if m else None
     if vanity is None and cfg["faceit_api_key"]:
-        out["faceit_nickname"] = q
+        out["faceit_nickname"] = q.lstrip("@")
         return out
     vanity = vanity or q
     try:
@@ -192,11 +192,32 @@ def resolve_query(q, cfg):
     except ApiError:
         pass
     if not out["steam64"]:
-        raise ApiError(404, "Could not resolve player. Use a Steam64 ID, Steam profile URL, or (with a FACEIT key) a FACEIT nickname.")
+        hint = "" if cfg["faceit_api_key"] else " To search by FACEIT nickname, add your FACEIT API key in ⚙ Settings."
+        raise ApiError(404, f"Could not find a Steam profile called \"{vanity}\". Use a Steam64 ID or Steam profile URL.{hint}")
     return out
 
 
 # ---------------------------------------------------------------- FACEIT ---
+
+class FriendlyError(ApiError):
+    """An ApiError whose message is ready to show to the user as-is."""
+
+
+def find_faceit_player(nick, key):
+    """Exact nickname lookup is case-sensitive; fall back to FACEIT's search, which isn't."""
+    try:
+        return faceit_get("/players", key, nickname=nick)
+    except ApiError as e:
+        if e.status != 404:
+            raise
+    items = faceit_get("/search/players", key, nickname=nick, game="cs2", limit=20).get("items") or []
+    hit = next((p for p in items if (p.get("nickname") or "").lower() == nick.lower()), None) or (items[0] if len(items) == 1 else None)
+    if not hit:
+        if items:
+            raise FriendlyError(404, f'No FACEIT player named "{nick}". Did you mean: {", ".join(p["nickname"] for p in items[:5])}?')
+        raise FriendlyError(404, f'No FACEIT player named "{nick}" with CS2 on their account.')
+    return faceit_get(f"/players/{hit['player_id']}", key)
+
 
 def fetch_faceit(ident, cfg):
     key = cfg["faceit_api_key"]
@@ -204,11 +225,14 @@ def fetch_faceit(ident, cfg):
         return {"available": False, "reason": "No FACEIT API key configured (Settings)."}
     try:
         if ident.get("faceit_nickname"):
-            player = faceit_get("/players", key, nickname=ident["faceit_nickname"])
+            player = find_faceit_player(ident["faceit_nickname"], key)
         else:
             player = faceit_get("/players", key, game="cs2", game_player_id=ident["steam64"])
+    except FriendlyError as e:
+        return {"available": False, "reason": str(e)}
     except ApiError as e:
-        reason = "No FACEIT account found." if e.status == 404 else ("FACEIT rejected the API key." if e.status in (401, 403) else str(e))
+        reason = ("No FACEIT account found for this Steam account." if e.status == 404 else
+                  "FACEIT rejected the API key. Use a \"Server side\" key from FACEIT App Studio." if e.status in (401, 403) else str(e))
         return {"available": False, "reason": reason}
     pid = player["player_id"]
     raw = {"available": True, "player": player, "stats": None, "matches": [], "errors": []}
@@ -876,7 +900,8 @@ def lookup(q):
     fc = normalize_faceit(fr)
     steam64 = ident["steam64"] or (fc.get("steam64") if fc.get("available") else None)
     if not steam64:
-        raise ApiError(404, fc.get("reason") or "Could not determine the player's Steam64 ID.")
+        raise ApiError(404, f'FACEIT account "{fc.get("nickname")}" has no CS2 profile linked.' if fc.get("available")
+                       else fc.get("reason") or "Could not determine the player's Steam64 ID.")
     lt = normalize_leetify(fetch_leetify(steam64, cfg), steam64)
     if not fc.get("available") and not lt.get("available"):
         raise ApiError(404, f"No data. FACEIT: {fc.get('reason')}  Leetify: {lt.get('reason')}")
