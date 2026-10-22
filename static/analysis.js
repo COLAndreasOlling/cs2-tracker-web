@@ -358,5 +358,94 @@ const Analysis = (() => {
     return { priorities, more, keep: keep.slice(0, 6), routine, matches: (d.matches || []).length };
   }
 
-  return { integrity, mapCoaching, coachingPlan };
+  /* ---------------------------------------------------------------- role --- */
+  // A statistical estimate of the player's role (not an AI model): each role gets a 0-100 score
+  // from the signals that are available, with the reasons shown. Ranges are rough references
+  // calibrated on real Leetify data; AWPer needs FACEIT's sniper-kill stats (Leetify has no
+  // per-weapon kills), so without them AWP is reported as "can't tell".
+  const lin = (x, lo, hi) => (x == null || Number.isNaN(x) ? null : Math.max(0, Math.min(1, (x - lo) / (hi - lo))));
+  const inv = (v) => (v == null ? null : 1 - v); // "lower is more typical" signals, keeping null = unknown
+  const ROLE_INFO = {
+    awper: { name: "AWPer", blurb: "Takes a large share of the team's kills with the AWP and holds long angles." },
+    entry: { name: "Entry fragger", blurb: "First into the site – takes opening duels and dies where teammates can trade." },
+    support: { name: "Support", blurb: "Utility-heavy: flashes and smokes for teammates, assists more than average." },
+    lurker: { name: "Lurker", blurb: "Plays away from the team, catches rotations, and survives rounds alone." },
+    rifler: { name: "Second rifle / trader", blurb: "Follows the entry and trades – often in position to refrag a fallen teammate." },
+  };
+
+  function weighted(parts) {
+    const ok = parts.filter(([v]) => v != null);
+    const w = ok.reduce((a, [, wt]) => a + wt, 0);
+    return w >= 0.5 ? Math.round((100 * ok.reduce((a, [v, wt]) => a + v * wt, 0)) / w) : null;
+  }
+
+  function role(d) {
+    const all = (d.matches || []).filter((m) => m.ext && m.rounds);
+    const faceitOnes = all.filter((m) => m.source === "faceit");
+    const ms = faceitOnes.length >= 5 ? faceitOnes : all;
+    const basis = faceitOnes.length >= 5 ? `${ms.length} FACEIT matches` : `${ms.length} matches (fewer than 5 analysed FACEIT matches, so all platforms)`;
+    if (ms.length < 5) return { available: false, reason: "Needs at least 5 Leetify-analysed matches to estimate a role." };
+
+    const R = sum(ms.map((m) => m.rounds)), e = (k) => sum(ms.map((m) => m.ext[k]));
+    const kills = sum(ms.map((m) => m.kills));
+    const sig = {
+      tradeOpp: e("trade_opps") / R, // in position to refrag a teammate
+      tradedOpp: e("traded_opps") / R, // died where a teammate could trade (playing in front)
+      survival: (100 * e("survived")) / R,
+      util: (e("flash_thrown") + e("he_thrown") + e("molotov_thrown") + e("smoke_thrown")) / R,
+      enemiesFlashed: e("flash_foe") / R,
+      flashAssist: e("flash_assist") / R,
+      kpr: kills / R,
+      apr: sum(ms.map((m) => m.assists)) / R,
+    };
+    // FACEIT's extended stats (per match, or lifetime as a fallback)
+    const fx = (d.matches || []).filter((m) => m.source === "faceit").map((m) => ({ fx: (m.faceit_stats || m).fx, kills: (m.faceit_stats || m).kills, rounds: (m.faceit_stats || m).rounds })).filter((x) => x.fx);
+    const fxSum = (k) => { const v = fx.filter((x) => x.fx[k] != null); return v.length >= 5 ? { n: sum(v.map((x) => x.fx[k])), kills: sum(v.map((x) => x.kills)), rounds: sum(v.map((x) => x.rounds)) } : null; };
+    const life = d.faceit?.available ? d.faceit.lifetime || {} : {};
+    const sn = fxSum("sniper_kills"), en = fxSum("entry_count");
+    let sniperShare = sn ? sn.n / sn.kills : life.sniper_kill_rate ?? null;
+    if (sniperShare != null && sniperShare > 1) sniperShare /= 100; // tolerate a percentage
+    let entryRate = en ? en.n / en.rounds : life.entry_rate ?? null;
+    if (entryRate != null && entryRate > 1) entryRate /= 100;
+
+    const why = (label, value) => ({ label, value });
+    const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
+    const scores = {
+      awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.35), 0.85], [lin(sig.survival, 25, 45), 0.15]]),
+      entry: weighted([[lin(entryRate, 0.08, 0.22), 0.45], [lin(sig.tradedOpp, 0.12, 0.32), 0.3], [inv(lin(sig.survival, 20, 45)), 0.25]]),
+      support: weighted([[lin(sig.util, 0.9, 2.4), 0.35], [lin(sig.enemiesFlashed, 0.2, 0.9), 0.25], [lin(sig.apr, 0.08, 0.22), 0.2], [inv(lin(sig.kpr, 0.55, 0.95)), 0.2]]),
+      lurker: weighted([[inv(lin(sig.tradeOpp, 0.2, 0.5)), 0.4], [inv(lin(sig.tradedOpp, 0.1, 0.32)), 0.3], [lin(sig.survival, 25, 45), 0.3]]),
+      rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(d.leetify?.stats?.trade_kills_success_percentage, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2]]),
+    };
+    const reasons = {
+      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles", pct(100 * sniperShare)), why("Rounds survived", pct(sig.survival))],
+      entry: [...(entryRate != null ? [why("Entry attempts per round (FACEIT)", f2(entryRate))] : []), why("Deaths in tradeable spots per round", f2(sig.tradedOpp)), why("Rounds survived", pct(sig.survival))],
+      support: [why("Grenades per round", f2(sig.util)), why("Enemies flashed per round", f2(sig.enemiesFlashed)), why("Assists per round", f2(sig.apr)), why("Kills per round", f2(sig.kpr))],
+      lurker: [why("Trade chances per round (low = away from team)", f2(sig.tradeOpp)), why("Deaths in tradeable spots per round", f2(sig.tradedOpp)), why("Rounds survived", pct(sig.survival))],
+      rifler: [why("Trade chances per round", f2(sig.tradeOpp)), ...(d.leetify?.stats?.trade_kills_success_percentage != null ? [why("Trade kill success", pct(d.leetify.stats.trade_kills_success_percentage))] : []), why("Kills per round", f2(sig.kpr))],
+    };
+    const ranked = Object.keys(scores).map((k) => ({ id: k, ...ROLE_INFO[k], score: scores[k], why: reasons[k] }))
+      .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+    const [top, second] = ranked;
+    const flexible = top.score == null || top.score < 45;
+    const gap = top.score != null && second?.score != null ? top.score - second.score : null;
+    const confidence = flexible ? "low" : gap >= 15 ? "clear" : "leaning";
+
+    // traits that sit on top of the role
+    const lr = d.leetify?.rating || {}, traits = [];
+    if (lr.clutch != null && lr.clutch >= 2) traits.push("Clutch player");
+    if (lr.opening != null && lr.opening >= 2) traits.push("Wins opening duels");
+    if (lr.opening != null && lr.opening <= -2) traits.push("Loses opening duels");
+    if (sig.kpr >= 0.85) traits.push("High fragger");
+    if (lr.ct != null && lr.t != null && Math.abs(lr.ct - lr.t) >= 2.5) traits.push(lr.ct > lr.t ? "Stronger on CT" : "Stronger on T");
+    if (!(sniperShare != null)) traits.push("AWP use unknown (no FACEIT sniper data)");
+
+    return {
+      available: true, basis, confidence, traits, ranked,
+      primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
+      secondary: !flexible && second?.score != null && second.score >= 45 && gap < 20 ? second : null,
+    };
+  }
+
+  return { integrity, mapCoaching, coachingPlan, role };
 })();

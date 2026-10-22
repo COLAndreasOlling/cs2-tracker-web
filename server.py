@@ -251,6 +251,17 @@ def fetch_faceit(ident, cfg):
     return raw
 
 
+# FACEIT's extended CS2 match stats, when present (names as FACEIT reports them; absent keys stay None).
+FACEIT_FX = {"sniper_kills": "Sniper Kills", "entry_count": "Entry Count", "entry_wins": "Entry Wins",
+             "first_kills": "First Kills", "util_dmg": "Utility Damage", "util_count": "Utility Count",
+             "flash_count": "Flash Count", "enemies_flashed": "Enemies Flashed", "clutch_kills": "Clutch Kills",
+             "v1_count": "1v1Count", "v1_wins": "1v1Wins", "v2_count": "1v2Count", "v2_wins": "1v2Wins"}
+
+
+def faceit_extended(st):
+    return {k: num(pick(st, v)) for k, v in FACEIT_FX.items()}
+
+
 def faceit_multi(st):
     """Rounds with 1..5 kills. FACEIT reports 2K-5K; 1K rounds are the kills left over."""
     mk = [num(pick(st, k), 0) for k in ("Double Kills", "Triple Kills", "Quadro Kills", "Penta Kills")]
@@ -296,6 +307,7 @@ def normalize_faceit(raw):
             "rounds": rounds,
             "mk3plus": sum(num(pick(st, k), 0) for k in ("Triple Kills", "Quadro Kills", "Penta Kills")),
             "multi": faceit_multi(st),
+            "fx": faceit_extended(st),
         })
     matches.sort(key=lambda m: m["date"] or "", reverse=True)
     recent = life.get("Recent Results") or []
@@ -326,6 +338,9 @@ def normalize_faceit(raw):
             "clutch_1v1": num(pick(life, "1v1 Win Rate")),
             "clutch_1v2": num(pick(life, "1v2 Win Rate")),
             "sniper_kill_rate": num(pick(life, "Sniper Kill Rate")),
+            "entry_rate": num(pick(life, "Entry Rate")),
+            "utility_usage_pr": num(pick(life, "Utility Usage per Round")),
+            "enemies_flashed_pr": num(pick(life, "Enemies Flashed per Round")),
             "recent_results": [str(r) for r in recent],
         },
         "maps": maps,
@@ -369,6 +384,7 @@ def match_ext(me):
         "trade_opps": me.get("trade_kill_opportunities"), "trade_succ": me.get("trade_kills_succeed"),
         "traded_opps": me.get("traded_death_opportunities"), "traded_succ": me.get("traded_deaths_succeed"),
         "survived": me.get("rounds_survived"),
+        "flash_assist": me.get("flash_assist"),
     }
 
 
@@ -459,7 +475,7 @@ def merge_matches(fc, lt):
             if f and m.get("adr") is None:
                 m["adr"] = f["adr"]
             if f:  # FACEIT's own numbers for this match, used for the FACEIT rating
-                m["faceit_stats"] = {k: f[k] for k in ("kills", "deaths", "rounds", "multi")}
+                m["faceit_stats"] = {k: f[k] for k in ("kills", "deaths", "rounds", "multi", "fx")}
         out += [m for m in fc["matches"] if m["id"] not in seen]
     out.sort(key=lambda m: m["date"] or "", reverse=True)
     return out
@@ -854,6 +870,7 @@ def demo_detail(rnd, mp, rounds):
         "traded_death_opportunities": traded_opps,
         "traded_deaths_succeed": round(traded_opps * clamp(0.4 + rnd.gauss(0, 0.12), 0, 1)),
         "rounds_survived": max(0, round(rounds * clamp(0.3 + rnd.gauss(0, 0.07), 0, 1))),
+        "flash_assist": max(0, round(rounds * 0.06 * u + rnd.gauss(0, 0.6))),
         "accuracy_head": clamp(0.21 + rnd.gauss(0, 0.04), 0, 1),
         "accuracy_enemy_spotted": clamp(0.36 + rnd.gauss(0, 0.05), 0, 1),
         "spray_accuracy": clamp(0.39 + rnd.gauss(0, 0.08), 0, 1),
@@ -912,6 +929,9 @@ def demo_raw():
                                       "ADR": str(round(kills / rounds * 112, 1)), "Headshots %": str(round(100 * hs / kills)),
                                       "Result": "1" if win else "0", "Score": f"{my} / {op}", "Rounds": str(my + op),
                                       "Double Kills": str(mk[1]), "Triple Kills": str(mk[2]), "Quadro Kills": str(mk[3]), "Penta Kills": str(mk[4]),
+                                      "Sniper Kills": str(rnd.randint(0, 2)), "Entry Count": str(rnd.randint(1, 4)), "Entry Wins": str(rnd.randint(0, 2)),
+                                      "Utility Count": str(round((my + op) * 1.3)), "Flash Count": str(round((my + op) * 0.5)),
+                                      "Enemies Flashed": str(round((my + op) * 0.25)), "Utility Damage": str(rnd.randint(60, 240)),
                                       "Match Finished At": int(when.timestamp() * 1000)}})
     leetify = {"available": True, "errors": [], "matches": l_matches, "profile": {
         "privacy_mode": "public", "winrate": 0.54, "total_matches": 812, "first_match_date": "2023-09-27T18:00:00Z",

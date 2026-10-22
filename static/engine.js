@@ -181,6 +181,12 @@ const Engine = (() => {
     return raw;
   }
 
+  // FACEIT's extended CS2 match stats, when present (names as FACEIT reports them; absent keys stay null).
+  const FACEIT_FX = { sniper_kills: "Sniper Kills", entry_count: "Entry Count", entry_wins: "Entry Wins",
+    first_kills: "First Kills", util_dmg: "Utility Damage", util_count: "Utility Count",
+    flash_count: "Flash Count", enemies_flashed: "Enemies Flashed", clutch_kills: "Clutch Kills",
+    v1_count: "1v1Count", v1_wins: "1v1Wins", v2_count: "1v2Count", v2_wins: "1v2Wins" };
+
   /** Rounds with 1..5 kills. FACEIT reports 2K-5K; 1K rounds are the kills left over. */
   function faceitMulti(st) {
     const mk = ["Double Kills", "Triple Kills", "Quadro Kills", "Penta Kills"].map((k) => num(pick(st, k), 0));
@@ -213,6 +219,7 @@ const Engine = (() => {
         rounds: num(pick(st, "Rounds")),
         mk3plus: ["Triple Kills", "Quadro Kills", "Penta Kills"].reduce((a, k) => a + num(pick(st, k), 0), 0),
         multi: faceitMulti(st),
+        fx: Object.fromEntries(Object.entries(FACEIT_FX).map(([k, v]) => [k, num(pick(st, v))])),
       };
     }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return {
@@ -227,6 +234,9 @@ const Engine = (() => {
         utility_dpr: num(pick(life, "Utility Damage per Round")), flash_success: num(pick(life, "Flash Success Rate")),
         clutch_1v1: num(pick(life, "1v1 Win Rate")), clutch_1v2: num(pick(life, "1v2 Win Rate")),
         sniper_kill_rate: num(pick(life, "Sniper Kill Rate")),
+        entry_rate: num(pick(life, "Entry Rate")),
+        utility_usage_pr: num(pick(life, "Utility Usage per Round")),
+        enemies_flashed_pr: num(pick(life, "Enemies Flashed per Round")),
         recent_results: (life["Recent Results"] || []).map(String),
       },
       maps, matches,
@@ -262,6 +272,7 @@ const Engine = (() => {
     trade_opps: me.trade_kill_opportunities ?? null, trade_succ: me.trade_kills_succeed ?? null,
     traded_opps: me.traded_death_opportunities ?? null, traded_succ: me.traded_deaths_succeed ?? null,
     survived: me.rounds_survived ?? null,
+    flash_assist: me.flash_assist ?? null,
   });
 
   function normalizeLeetify(raw, steam64) {
@@ -321,7 +332,7 @@ const Engine = (() => {
       for (const m of out) {
         const f = fmap[m.faceit_id];
         if (f && m.adr == null) m.adr = f.adr;
-        if (f) m.faceit_stats = { kills: f.kills, deaths: f.deaths, rounds: f.rounds, multi: f.multi }; // for the FACEIT rating
+        if (f) m.faceit_stats = { kills: f.kills, deaths: f.deaths, rounds: f.rounds, multi: f.multi, fx: f.fx }; // FACEIT rating & role
       }
       out.push(...fc.matches.filter((m) => !seen.has(m.id)));
     }
@@ -534,6 +545,7 @@ const Engine = (() => {
       traded_death_opportunities: tradedOpps,
       traded_deaths_succeed: Math.round(tradedOpps * clamp(0.4 + rnd.gauss(0, 0.12), 0, 1)),
       rounds_survived: Math.max(0, Math.round(rounds * clamp(0.3 + rnd.gauss(0, 0.07), 0, 1))),
+      flash_assist: Math.max(0, Math.round(rounds * 0.06 * u + rnd.gauss(0, 0.6))),
       accuracy_head: clamp(0.21 + rnd.gauss(0, 0.04), 0, 1),
       accuracy_enemy_spotted: clamp(0.36 + rnd.gauss(0, 0.05), 0, 1),
       spray_accuracy: clamp(0.39 + rnd.gauss(0, 0.08), 0, 1),
@@ -584,7 +596,10 @@ const Engine = (() => {
         fItems.push({ stats: { "Match Id": fid, Map: mp, Kills: String(kills), Deaths: String(deaths), Assists: "3",
           ADR: String(roundOr((kills / rounds) * 112, 1)), "Headshots %": String(Math.round((100 * hs) / kills)),
           Result: win ? "1" : "0", Score: `${my} / ${op}`, Rounds: String(my + op), "Double Kills": String(mk[1]), "Triple Kills": String(mk[2]),
-          "Quadro Kills": String(mk[3]), "Penta Kills": String(mk[4]), "Match Finished At": when.getTime() } });
+          "Quadro Kills": String(mk[3]), "Penta Kills": String(mk[4]),
+          "Sniper Kills": String(rnd.int(0, 2)), "Entry Count": String(rnd.int(1, 4)), "Entry Wins": String(rnd.int(0, 2)),
+          "Utility Count": String(Math.round((my + op) * 1.3)), "Flash Count": String(Math.round((my + op) * 0.5)),
+          "Enemies Flashed": String(Math.round((my + op) * 0.25)), "Utility Damage": String(rnd.int(60, 240)), "Match Finished At": when.getTime() } });
     }
     const leetify = { available: true, errors: [], matches: lMatches, profile: {
       privacy_mode: "public", winrate: 0.54, total_matches: 812, first_match_date: "2023-09-27T18:00:00Z", name: "demo_player",

@@ -239,7 +239,7 @@ function render(d) {
   const score = d.score;
   const ringC = 2 * Math.PI * 52, ringFill = score == null ? 0 : (score / 100) * ringC;
 
-  const integ = Analysis.integrity(d), coach = Analysis.mapCoaching(d), plan = Analysis.coachingPlan(d, coach);
+  const integ = Analysis.integrity(d), coach = Analysis.mapCoaching(d), plan = Analysis.coachingPlan(d, coach), roleEst = Analysis.role(d);
   const integDot = integ.available ? { none: "--good", some: "--warn", high: "--bad", flag: "--bad" }[integ.level] : null;
   const tipCount = coach.available ? coach.maps.reduce((a, m) => a + m.tips.length, 0) : 0;
   const level = fc.available ? `Lvl ${fmtInt(fc.level)} · ${fmtInt(fc.elo)} ELO` : lt.available && lt.ranks.faceit_elo ? `Lvl ${fmtInt(lt.ranks.faceit)} · ${fmtInt(lt.ranks.faceit_elo)} ELO` : "";
@@ -267,6 +267,7 @@ function render(d) {
         <span class="muted">Steam64 ${esc(d.steam64)}</span>
         ${lt.available && lt.first_match ? `<span class="muted">Tracked on Leetify since ${new Date(lt.first_match).toLocaleDateString()}</span>` : ""}
       </div>
+      ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span></div>` : ""}
       <div class="ranks">${ranks.map(([k, v]) => `<div class="rank"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
       ${comp && comp.length ? `<div class="muted" style="margin-top:8px;font-size:12px">Competitive map ranks: ${comp.map((c) => `${esc(c.map)} ${c.rank}`).join(" · ")}</div>` : ""}
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
@@ -293,6 +294,9 @@ function render(d) {
     ${kpi("3K+ per match", fmt(o.mk3plus_per_match, 2), delta(f10.mk3plus_per_match, prev.mk3plus_per_match, 2))}
     ${kpi("Streak", d.streaks.current ? `${d.streaks.current}${d.streaks.current_type === "win" ? "W" : "L"}` : "–", `<span class="muted">best ${d.streaks.longest_win}W · worst ${d.streaks.longest_loss}L</span>`)}
   </div>
+
+  <div class="section-title">Role &amp; playstyle</div>
+  ${roleSection(roleEst)}
 
   <div class="section-title">Progress</div>
   <div class="grid g-2-1">
@@ -424,6 +428,26 @@ function extremeMatches(ms, d) {
       <td class="n">${signed(m.rating, 2)}</td>
       <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener" title="Open the FACEIT matchroom">FACEIT ↗</a>` : `<span class="muted" title="Matchrooms exist only for FACEIT matches">–</span>`}</td></tr>`).join("")}
   </tbody></table></div>`;
+}
+
+/** Estimated role: primary/secondary, traits, and every role's score with the reasons behind it. */
+function roleSection(r) {
+  if (!r.available) return `<div class="card empty" style="margin-bottom:16px">${esc(r.reason)}</div>`;
+  const bar = (x) => `<div class="role-row">
+      <div class="role-name">${esc(x.name)}</div>
+      <div class="track"><div class="fill" style="width:${x.score ?? 0}%;background:${css(x.id === r.primary.id ? "--accent" : "--series-1")}"></div></div>
+      <div class="val">${x.score == null ? `<span class="muted">n/a</span>` : x.score}</div>
+      <div class="role-why">${x.why.map((w) => `${esc(w.label)}: <b>${esc(w.value)}</b>`).join(" · ")}</div>
+    </div>`;
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="card-head"><div>
+      <h2>${esc(r.primary.name)}${r.secondary ? ` <span class="muted" style="font-weight:500">/ ${esc(r.secondary.name)}</span>` : ""}</h2>
+      <div class="sub" style="margin-bottom:6px">${esc(r.primary.blurb)}</div></div>
+      <span class="pill">${esc({ clear: "Clear profile", leaning: "Leaning", low: "No clear role" }[r.confidence])}</span></div>
+    ${r.traits.length ? `<div class="ranks" style="margin:0 0 14px">${r.traits.map((t) => `<span class="src">${esc(t)}</span>`).join("")}</div>` : ""}
+    <div class="role-rows">${r.ranked.map(bar).join("")}</div>
+    <p class="muted" style="font-size:12px;margin:12px 0 0">A statistical estimate from ${esc(r.basis)} – each role scores 0–100 from the stats listed; ranges are rough references, not official. Without FACEIT's sniper-kill stats (sign in), AWP can't be judged.</p>
+  </div>`;
 }
 
 /** Overall coaching plan: top priorities with evidence and actions, strengths, and a practice routine. */
