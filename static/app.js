@@ -466,7 +466,7 @@ function drawCoaching(c) {
   };
   const f1 = (v) => v.toFixed(1), f2 = (v) => v.toFixed(2), p0 = (v) => `${Math.round(v)}%`, sg = (v) => (Math.abs(v) < 0.05 ? "0.0" : (v > 0 ? "+" : "") + v.toFixed(1));
   el.innerHTML = `
-    <div class="card-head"><div><h2>What to work on, per map</h2><div class="sub">Each map compared with your other maps (Leetify-analysed matches). Green = better than your other maps, red = worse.${c.skipped.length ? ` Skipped (fewer than ${c.minMatches} matches): ${esc(c.skipped.join(", "))}.` : ""}</div></div>
+    <div class="card-head"><div><h2>What to work on, per map</h2><div class="sub">Active Duty maps only (${esc(c.pool.join(", "))}), each compared with your other Active Duty maps. Green = better, red = worse.${c.skipped.length ? ` Too few matches (under ${c.minMatches}): ${esc(c.skipped.join(", "))}.` : ""}${c.outOfPool.length ? ` Not in the competitive pool, so no tips: ${esc(c.outOfPool.join(", "))}.` : ""}</div></div>
       <select id="coachSel" aria-label="Map">${c.maps.map((x) => `<option value="${esc(x.map)}" ${x.map === sel ? "selected" : ""}>${esc(x.map)} (${x.stats.n})${x.tips.length ? ` · ${x.tips.length} tip${x.tips.length > 1 ? "s" : ""}` : ""}</option>`).join("")}</select></div>
     <div class="grid g2" style="margin:0">
       <div>

@@ -544,8 +544,8 @@ const Engine = (() => {
   /** Synthetic data in the same shape as the real APIs, so demo exercises the full pipeline. */
   function demoRaw() {
     const rnd = rng(42);
-    const maps = ["de_mirage", "de_inferno", "de_ancient", "de_nuke", "de_anubis", "de_dust2", "de_train"];
-    const skill = { de_mirage: 0.15, de_inferno: 0.08, de_ancient: 0.0, de_nuke: -0.12, de_anubis: 0.05, de_dust2: 0.1, de_train: -0.05 };
+    const maps = ["de_mirage", "de_inferno", "de_ancient", "de_nuke", "de_anubis", "de_dust2", "de_overpass"];
+    const skill = { de_mirage: 0.15, de_inferno: 0.08, de_ancient: 0.0, de_nuke: -0.12, de_anubis: 0.05, de_dust2: 0.1, de_overpass: -0.05 };
     const now = Date.now(), premier = 16480, elo = 1785;
     const lMatches = [], lRecent = [], fItems = [];
     for (let i = 0; i < 100; i++) {

@@ -163,11 +163,22 @@ const Analysis = (() => {
 
   const MIN_MATCHES = 5;
 
+  // Active Duty pool (Premier / FACEIT / pro play) - tips are only given for these maps, compared
+  // with each other. Last changed 22 Jan 2026 (Anubis in, Train out). Update when Valve rotates maps.
+  const ACTIVE_DUTY = ["Ancient", "Anubis", "Dust2", "Inferno", "Mirage", "Nuke", "Overpass"];
+  const norm = (name) => String(name).toLowerCase().replace(/[^a-z0-9]/g, "").replace(/ii$/, "2");
+  const ACTIVE_SET = new Set(ACTIVE_DUTY.map(norm));
+  const isActiveDuty = (name) => ACTIVE_SET.has(norm(name));
+
   function mapCoaching(d) {
-    const byMap = {};
-    for (const m of d.matches || []) (byMap[m.map] ||= []).push(m);
+    const byMap = {}, outOfPool = new Set();
+    for (const m of d.matches || []) {
+      if (isActiveDuty(m.map)) (byMap[m.map] ||= []).push(m);
+      else outOfPool.add(m.map);
+    }
     const maps = Object.keys(byMap).filter((k) => byMap[k].filter((m) => m.ext).length >= MIN_MATCHES);
-    if (!maps.length) return { available: false, reason: `Needs at least ${MIN_MATCHES} Leetify-analysed matches on a map.` };
+    const base = { pool: ACTIVE_DUTY, outOfPool: [...outOfPool].sort(), minMatches: MIN_MATCHES };
+    if (!maps.length) return { ...base, available: false, reason: `Needs at least ${MIN_MATCHES} Leetify-analysed matches on an Active Duty map (${ACTIVE_DUTY.join(", ")}).` };
     const result = maps.map((name) => {
       const p = profile(byMap[name]);
       const others = profile(Object.entries(byMap).filter(([k]) => k !== name).flatMap(([, v]) => v));
@@ -190,7 +201,7 @@ const Analysis = (() => {
     // weakest map first: most tips, then lowest rating
     result.sort((a, b) => b.tips.length - a.tips.length || (a.stats?.rating ?? 0) - (b.stats?.rating ?? 0));
     const skipped = Object.keys(byMap).filter((k) => !maps.includes(k));
-    return { available: true, maps: result, minMatches: MIN_MATCHES, skipped };
+    return { ...base, available: true, maps: result, skipped };
   }
 
   /* ------------------------------------------------------ coaching plan --- */
@@ -272,7 +283,8 @@ const Analysis = (() => {
 
   function coachingPlan(d, coach) {
     const lt = d.leetify || {};
-    const c = { lt: lt.available ? lt : {}, st: (lt.available && lt.stats) || {}, p: profile(d.matches || []) };
+    const pool = (d.matches || []).filter((m) => isActiveDuty(m.map));
+    const c = { lt: lt.available ? lt : {}, st: (lt.available && lt.stats) || {}, p: profile(pool.length ? pool : d.matches || []) };
     const mapsWith = (keys) => (coach?.available ? coach.maps.filter((m) => m.tips.some((t) => keys.includes(t.key))).map((m) => m.map) : []);
     const areas = [], keep = [];
 
