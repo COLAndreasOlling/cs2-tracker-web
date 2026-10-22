@@ -113,7 +113,7 @@ const Engine = (() => {
     } catch (e) {
       const reason = e.friendly ? e.message
         : e.status === 404 ? "No FACEIT account found for this Steam account."
-        : [401, 403].includes(e.status) ? "FACEIT rejected the API key. On this website use a \"Client side\" key from FACEIT App Studio, and check it isn't restricted to a different domain."
+        : [401, 403].includes(e.status) ? "FACEIT rejected the API key. Check that you pasted the whole key (⚙ Settings) and that it's still active in FACEIT App Studio. A Client side key must also allow this site's domain."
         : e.message;
       return { available: false, reason };
     }

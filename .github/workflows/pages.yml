@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       # Optional: bake a FACEIT *Client side* key into the site so visitors can search by
       # nickname without entering a key. Set it under Settings -> Secrets -> Actions.
+      # NEVER use a Server side key here: it would be public in the deployed site.
       - name: Inject FACEIT client key
         env:
           FACEIT_CLIENT_KEY: ${{ secrets.FACEIT_CLIENT_KEY }}

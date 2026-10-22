@@ -501,7 +501,7 @@ $("#settingsBtn").onclick = async () => {
   const browser = cfg.mode === "browser";
   $("#keysLocked").hidden = !cfg.locked; $("#keysLocal").hidden = !!cfg.locked || browser; $("#keysBrowser").hidden = !browser;
   $("#keyInputs").hidden = !!cfg.locked; $("#saveKeys").hidden = !!cfg.locked;
-  $("#faceitKeyType").textContent = browser ? "Client side" : "Server side";
+  $("#faceitKeyType").textContent = browser ? "new key (Server side works – it stays in this browser)" : "Server side";
   $("#historyTools").hidden = !browser;
   $("#settings").showModal();
 };
