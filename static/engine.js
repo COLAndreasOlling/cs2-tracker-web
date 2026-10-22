@@ -181,6 +181,13 @@ const Engine = (() => {
     return raw;
   }
 
+  /** Rounds with 1..5 kills. FACEIT reports 2K-5K; 1K rounds are the kills left over. */
+  function faceitMulti(st) {
+    const mk = ["Double Kills", "Triple Kills", "Quadro Kills", "Penta Kills"].map((k) => num(pick(st, k), 0));
+    const single = num(pick(st, "Kills"), 0) - mk.reduce((a, n, i) => a + (i + 2) * n, 0);
+    return [Math.max(0, single), ...mk];
+  }
+
   function normalizeFaceit(raw) {
     if (!raw.available) return raw;
     const p = raw.player, game = (p.games || {}).cs2 || {};
@@ -205,6 +212,7 @@ const Engine = (() => {
         assists: num(pick(st, "Assists"), 0), adr: num(pick(st, "ADR")), hs_pct: num(pick(st, "Headshots %")),
         rounds: num(pick(st, "Rounds")),
         mk3plus: ["Triple Kills", "Quadro Kills", "Penta Kills"].reduce((a, k) => a + num(pick(st, k), 0), 0),
+        multi: faceitMulti(st),
       };
     }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return {
@@ -310,7 +318,11 @@ const Engine = (() => {
     const seen = new Set(out.filter((m) => m.faceit_id).map((m) => m.faceit_id));
     if (fc.available) {
       const fmap = Object.fromEntries(fc.matches.map((m) => [m.id, m]));
-      for (const m of out) { const f = fmap[m.faceit_id]; if (f && m.adr == null) m.adr = f.adr; }
+      for (const m of out) {
+        const f = fmap[m.faceit_id];
+        if (f && m.adr == null) m.adr = f.adr;
+        if (f) m.faceit_stats = { kills: f.kills, deaths: f.deaths, rounds: f.rounds, multi: f.multi }; // for the FACEIT rating
+      }
       out.push(...fc.matches.filter((m) => !seen.has(m.id)));
     }
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
@@ -492,6 +504,15 @@ const Engine = (() => {
   const DEMO_UTIL = { de_anubis: 0.5, de_nuke: 0.9 }; // demo player's utility is weak on Anubis
   const DEMO_T_SIDE = { de_nuke: -0.035 }; // ...and their T side is weak on Nuke
 
+  /** Rounds with 1..5 kills that add up to the match's kills. */
+  function demoMulti(rnd, kills) {
+    const m = [0, rnd.int(1, 4), rnd.int(0, 2), +(rnd.random() < 0.12), +(rnd.random() < 0.02)];
+    const total = () => m.reduce((a, n, i) => a + (i + 1) * n, 0);
+    while (total() > kills) m[m.findLastIndex((n) => n > 0)]--;
+    m[0] = kills - total();
+    return m;
+  }
+
   /** Utility/trade/accuracy fields of a demo match, in Leetify's per-match shape. */
   function demoDetail(rnd, mp, rounds) {
     const u = DEMO_UTIL[mp] || 1, clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -539,7 +560,7 @@ const Engine = (() => {
       const hs = Math.floor(kills * Math.min(0.75, Math.max(0.2, 0.47 + rnd.gauss(0, 0.1))));
       const src = rnd.weighted(["faceit", "matchmaking", "matchmaking_competitive"], [0.55, 0.35, 0.1]);
       const rating = form * 0.04, mid = `demo-${String(i).padStart(3, "0")}`, fid = src === "faceit" ? `1-${mid}` : null;
-      const mk = [Math.max(0, kills - 6 - rnd.int(0, 3)), rnd.int(1, 4), rnd.int(0, 2), +(rnd.random() < 0.12), +(rnd.random() < 0.02)];
+      const mk = demoMulti(rnd, kills);
       const finished = when.toISOString();
       lMatches.push({
         id: mid, finished_at: finished, data_source: src, data_source_match_id: fid, map_name: mp, has_banned_player: false,
@@ -562,7 +583,8 @@ const Engine = (() => {
       if (src === "faceit")
         fItems.push({ stats: { "Match Id": fid, Map: mp, Kills: String(kills), Deaths: String(deaths), Assists: "3",
           ADR: String(roundOr((kills / rounds) * 112, 1)), "Headshots %": String(Math.round((100 * hs) / kills)),
-          Result: win ? "1" : "0", Score: `${my} / ${op}`, Rounds: String(my + op), "Match Finished At": when.getTime() } });
+          Result: win ? "1" : "0", Score: `${my} / ${op}`, Rounds: String(my + op), "Double Kills": String(mk[1]), "Triple Kills": String(mk[2]),
+          "Quadro Kills": String(mk[3]), "Penta Kills": String(mk[4]), "Match Finished At": when.getTime() } });
     }
     const leetify = { available: true, errors: [], matches: lMatches, profile: {
       privacy_mode: "public", winrate: 0.54, total_matches: 812, first_match_date: "2023-09-27T18:00:00Z", name: "demo_player",

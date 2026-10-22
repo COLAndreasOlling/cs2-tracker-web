@@ -251,6 +251,13 @@ def fetch_faceit(ident, cfg):
     return raw
 
 
+def faceit_multi(st):
+    """Rounds with 1..5 kills. FACEIT reports 2K-5K; 1K rounds are the kills left over."""
+    mk = [num(pick(st, k), 0) for k in ("Double Kills", "Triple Kills", "Quadro Kills", "Penta Kills")]
+    single = num(pick(st, "Kills"), 0) - sum((i + 2) * n for i, n in enumerate(mk))
+    return [max(0, single)] + mk
+
+
 def normalize_faceit(raw):
     if not raw.get("available"):
         return raw
@@ -288,6 +295,7 @@ def normalize_faceit(raw):
             "hs_pct": num(pick(st, "Headshots %")),
             "rounds": rounds,
             "mk3plus": sum(num(pick(st, k), 0) for k in ("Triple Kills", "Quadro Kills", "Penta Kills")),
+            "multi": faceit_multi(st),
         })
     matches.sort(key=lambda m: m["date"] or "", reverse=True)
     recent = life.get("Recent Results") or []
@@ -450,6 +458,8 @@ def merge_matches(fc, lt):
             f = fmap.get(m.get("faceit_id"))
             if f and m.get("adr") is None:
                 m["adr"] = f["adr"]
+            if f:  # FACEIT's own numbers for this match, used for the FACEIT rating
+                m["faceit_stats"] = {k: f[k] for k in ("kills", "deaths", "rounds", "multi")}
         out += [m for m in fc["matches"] if m["id"] not in seen]
     out.sort(key=lambda m: m["date"] or "", reverse=True)
     return out
@@ -812,6 +822,16 @@ DEMO_UTIL = {"de_anubis": 0.5, "de_nuke": 0.9}  # demo player's utility is weak 
 DEMO_T_SIDE = {"de_nuke": -0.035}  # ...and their T side is weak on Nuke
 
 
+def demo_multi(rnd, kills):
+    """Rounds with 1..5 kills that add up to the match's kills."""
+    m = [0, rnd.randint(1, 4), rnd.randint(0, 2), int(rnd.random() < 0.12), int(rnd.random() < 0.02)]
+    while sum((i + 1) * n for i, n in enumerate(m)) > kills:
+        top = max(i for i, n in enumerate(m) if n)
+        m[top] -= 1
+    m[0] = kills - sum((i + 1) * n for i, n in enumerate(m))
+    return m
+
+
 def demo_detail(rnd, mp, rounds):
     """Utility/trade/accuracy fields of a demo match, in Leetify's per-match shape."""
     u = DEMO_UTIL.get(mp, 1.0)
@@ -864,7 +884,7 @@ def demo_raw():
         rating = form * 0.04
         mid = f"demo-{i:03d}"
         fid = f"1-demo-{i:03d}" if src == "faceit" else None
-        mk = [max(0, kills - 6 - rnd.randint(0, 3)), rnd.randint(1, 4), rnd.randint(0, 2), int(rnd.random() < 0.12), int(rnd.random() < 0.02)]
+        mk = demo_multi(rnd, kills)
         l_matches.append({
             "id": mid, "finished_at": when.isoformat().replace("+00:00", "Z"), "data_source": src,
             "data_source_match_id": fid, "map_name": mp, "has_banned_player": False,
@@ -891,6 +911,7 @@ def demo_raw():
             f_items.append({"stats": {"Match Id": fid, "Map": mp, "Kills": str(kills), "Deaths": str(deaths), "Assists": "3",
                                       "ADR": str(round(kills / rounds * 112, 1)), "Headshots %": str(round(100 * hs / kills)),
                                       "Result": "1" if win else "0", "Score": f"{my} / {op}", "Rounds": str(my + op),
+                                      "Double Kills": str(mk[1]), "Triple Kills": str(mk[2]), "Quadro Kills": str(mk[3]), "Penta Kills": str(mk[4]),
                                       "Match Finished At": int(when.timestamp() * 1000)}})
     leetify = {"available": True, "errors": [], "matches": l_matches, "profile": {
         "privacy_mode": "public", "winrate": 0.54, "total_matches": 812, "first_match_date": "2023-09-27T18:00:00Z",
