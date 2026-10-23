@@ -212,27 +212,27 @@ const Analysis = (() => {
 
   // Each rule compares this map (m) with the player's other maps (o). gap = how far off, for ranking.
   const RULES = [
-    { key: "util_pr", bad: (m, o) => m < o * 0.8 && o - m >= 0.1, gap: (m, o) => (o - m) / o,
+    { key: "util_pr", title: "Utility usage", good: (map, m, o) => `You use ${m.toFixed(2)} grenades per round on ${map} vs ${o.toFixed(2)} elsewhere – you come prepared with utility here.`, bad: (m, o) => m < o * 0.8 && o - m >= 0.1, gap: (m, o) => (o - m) / o,
       tip: (map, m, o) => `You use ${m.toFixed(2)} grenades per round on ${map} vs ${o.toFixed(2)} on your other maps. Learn 2–3 standard smokes and a molotov for each bombsite on ${map} so every round starts with a utility plan.` },
-    { key: "flash_eff", bad: (m, o) => m < o * 0.75, gap: (m, o) => (o - m) / o,
+    { key: "flash_eff", title: "Flash effectiveness", good: (map, m, o) => `Your flashes blind ${m.toFixed(2)} enemies each on ${map} vs ${o.toFixed(2)} elsewhere – your flash lineups work here.`, bad: (m, o) => m < o * 0.75, gap: (m, o) => (o - m) / o,
       tip: (map, m, o) => `Your flashes blind ${m.toFixed(2)} enemies each on ${map} vs ${o.toFixed(2)} elsewhere – they're landing behind cover or popping too early. Practise pop-flashes for the main entrances on ${map} in a private server.` },
-    { key: "flash_team", bad: (m, o) => m > o * 1.3 && m >= 0.3, gap: (m, o) => (m - o) / Math.max(o, 0.1),
+    { key: "flash_team", title: "Team flashes", good: (map, m, o) => `Few team flashes on ${map}: ${m.toFixed(2)} teammates blinded per flash vs ${o.toFixed(2)} elsewhere.`, bad: (m, o) => m > o * 1.3 && m >= 0.3, gap: (m, o) => (m - o) / Math.max(o, 0.1),
       tip: (map, m, o) => `You blind teammates with ${m.toFixed(2)} per flash on ${map} (vs ${o.toFixed(2)} elsewhere). Call your flashes and throw them over teammates, not past them.` },
-    { key: "util_death", bad: (m, o) => m > o * 1.25 && m >= 250, gap: (m, o) => (m - o) / o,
+    { key: "util_death", title: "Using your utility", good: (map, m, o) => `You use your utility before dying on ${map}: $${Math.round(m)} left on death vs $${Math.round(o)} elsewhere.`, bad: (m, o) => m > o * 1.25 && m >= 250, gap: (m, o) => (m - o) / o,
       tip: (map, m, o) => `You die holding $${Math.round(m)} of unused utility on average on ${map} (vs $${Math.round(o)} elsewhere). Use it earlier – a molotov on a common push or a flash before you peek.` },
-    { key: "he_dmg", bad: (m, o) => m < o * 0.7 && o - m >= 3, gap: (m, o) => (o - m) / o,
+    { key: "he_dmg", title: "HE damage", good: (map, m, o) => `Your HE grenades do ${m.toFixed(1)} damage each on ${map} vs ${o.toFixed(1)} elsewhere.`, bad: (m, o) => m < o * 0.7 && o - m >= 3, gap: (m, o) => (o - m) / o,
       tip: (map, m, o) => `Your HE grenades do ${m.toFixed(1)} damage each on ${map} vs ${o.toFixed(1)} elsewhere. Learn where defenders/attackers usually stack on ${map} and throw HEs there, ideally together with a teammate's.` },
-    { key: "util_dmg", bad: (m, o) => m < o * 0.7 && o - m >= 1, gap: (m, o) => (o - m) / o,
+    { key: "util_dmg", title: "Utility damage", good: (map, m, o) => `Your grenades do ${m.toFixed(1)} damage per round on ${map} vs ${o.toFixed(1)} elsewhere.`, bad: (m, o) => m < o * 0.7 && o - m >= 1, gap: (m, o) => (o - m) / o,
       tip: (map, m, o) => `Your grenades do ${m.toFixed(1)} damage per round on ${map} vs ${o.toFixed(1)} elsewhere. Learn molotov and HE lineups for the common positions on ${map}.` },
-    { key: "entry_success", bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
+    { key: "entry_success", title: "Entry duels", good: (map, m, o) => `You win ${Math.round(m)}% of entry duels on ${map} vs ${Math.round(o)}% elsewhere.`, bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
       tip: (map, m, o) => `You win ${Math.round(m)}% of your entry duels on ${map} vs ${Math.round(o)}% elsewhere. Enter behind a flash, or let a teammate take the first contact and trade it.` },
-    { key: "trade", bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
+    { key: "trade", title: "Trading teammates", good: (map, m, o) => `You trade fallen teammates ${Math.round(m)}% of the time on ${map} vs ${Math.round(o)}% elsewhere.`, bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
       tip: (map, m, o) => `You trade a fallen teammate ${Math.round(m)}% of the time on ${map} vs ${Math.round(o)}% elsewhere. Stay close enough to your entry player to re-peek within a second or two.` },
-    { key: "traded", bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
+    { key: "traded", title: "Getting traded", good: (map, m, o) => `${Math.round(m)}% of your deaths on ${map} get traded vs ${Math.round(o)}% elsewhere – you play close to your team here.`, bad: (m, o) => m < o - 12, gap: (m, o) => (o - m) / 100,
       tip: (map, m, o) => `Only ${Math.round(m)}% of your deaths on ${map} get traded (vs ${Math.round(o)}% elsewhere) – you're dying in isolated spots. Play positions on ${map} where a teammate can swing for you.` },
-    { key: "survival", bad: (m, o) => m < o - 8, gap: (m, o) => (o - m) / 100,
+    { key: "survival", title: "Survival", good: (map, m, o) => `You survive ${Math.round(m)}% of rounds on ${map} vs ${Math.round(o)}% elsewhere.`, bad: (m, o) => m < o - 8, gap: (m, o) => (o - m) / 100,
       tip: (map, m, o) => `You survive ${Math.round(m)}% of rounds on ${map} vs ${Math.round(o)}% elsewhere. Avoid the early, unsupported peeks – fall back after first contact more often.` },
-    { key: "preaim", bad: (m, o) => m > o * 1.2 && m - o >= 1, gap: (m, o) => (m - o) / o,
+    { key: "preaim", title: "Crosshair placement", good: (map, m, o) => `Better crosshair placement on ${map}: ${m.toFixed(1)}° vs ${o.toFixed(1)}° elsewhere – you know the angles here.`, bad: (m, o) => m > o * 1.2 && m - o >= 1, gap: (m, o) => (m - o) / o,
       tip: (map, m, o) => `Your crosshair placement is worse on ${map} (${m.toFixed(1)}° vs ${o.toFixed(1)}°) – you're not pre-aiming the common angles yet. Run a prefire-practice map for ${map} to learn where enemies appear.` },
   ];
 
@@ -281,7 +281,7 @@ const Analysis = (() => {
           const mv = p[r.key], ov = others[r.key];
           if (mv == null || ov == null || ov === 0) continue;
           if (r.bad(mv, ov)) tips.push({ key: r.key, gap: r.gap(mv, ov), text: r.tip(name, mv, ov) });
-          else if (r.bad(ov, mv)) strengths.push(r.key); // mirror: this map is clearly better
+          else if (r.bad(ov, mv)) strengths.push({ key: r.key, title: r.title, gap: r.gap(ov, mv), text: r.good(name, mv, ov) }); // mirror: this map is clearly better
         }
         const s = sideTip(name, p);
         if (s) tips.push(s);
@@ -290,7 +290,8 @@ const Analysis = (() => {
           tips.push({ key: "team", gap: 0.05, text: `You lose more on ${name} (${Math.round(p.winrate)}% win rate vs ${Math.round(others.winrate)}%) even though your own rating holds up – the issue is more likely team strategy on ${name} than your individual play.` });
       }
       tips.sort((a, b) => b.gap - a.gap);
-      return { map: name, stats: p, others, tips: tips.slice(0, 4), strengths };
+      strengths.sort((a, b) => b.gap - a.gap);
+      return { map: name, stats: p, others, tips: tips.slice(0, 4), allTips: tips, strengths };
     });
     // weakest map first: most tips, then lowest rating
     const score = (x) => x.stats?.rating ?? (x.stats?.frating != null ? (x.stats.frating - 1) * 10 : 0);
@@ -552,15 +553,17 @@ const Analysis = (() => {
 
   /* ------------------------------------------------------------ map plan --- */
   // Team-level patterns per map from FACEIT half scores (+ starting side from Leetify):
-  // round-win % per side, win rate by starting side, halftime leads/deficits, close games, OT.
-  // Advice is written for "me" (fix your weaknesses) or "opp" (anti-strat this player's teams).
-  const PLAN_MIN = 4; // minimum matches behind any single statement
+  // round-win % per side and per half, win rate by starting side, halftime leads/deficits,
+  // close games, OT - combined with the per-map comparisons from map coaching into
+  // strengths and weaknesses for each map.
+  const PLAN_MIN = 4; // minimum games behind any single statement
+  const SIDE_MIN_ROUNDS = 6; // half a half - second halves can end early at 13; the UI shows how many halves back each value
 
   function mapSides(ms) {
     const acc = { n: ms.length, wins: 0, startCT: { n: 0, wins: 0 }, startT: { n: 0, wins: 0 },
-      ctWon: 0, ctPlayed: 0, tWon: 0, tPlayed: 0, sided: 0,
+      ctWon: 0, ctPlayed: 0, tWon: 0, tPlayed: 0, sided: 0, fhWon: 0, fhPlayed: 0, shWon: 0, shPlayed: 0,
       lead: { n: 0, wins: 0 }, trail: { n: 0, wins: 0 }, tied: { n: 0, wins: 0 }, close: { n: 0, wins: 0 }, ot: { n: 0, wins: 0 },
-      halves: 0, ctRating: [], tRating: [], frating: [] };
+      halves: 0, ctRating: [], tRating: [], frating: [], rating: [] };
     for (const m of ms) {
       const won = m.outcome === "win";
       if (won) acc.wins++;
@@ -568,98 +571,148 @@ const Analysis = (() => {
       if (m.start_side === "T") { acc.startT.n++; if (won) acc.startT.wins++; }
       if (m.ct_rating != null) acc.ctRating.push(m.ct_rating);
       if (m.t_rating != null) acc.tRating.push(m.t_rating);
+      if (m.rating != null) acc.rating.push(m.rating);
       const fr = faceitRating(m); if (fr != null) acc.frating.push(fr);
       const h = m.halves;
       if (!h || h.fh == null || h.ofh == null) continue;
       acc.halves++;
+      const first = { won: h.fh, played: h.fh + h.ofh }, second = { won: h.sh || 0, played: (h.sh || 0) + (h.osh || 0) };
+      acc.fhWon += first.won; acc.fhPlayed += first.played; acc.shWon += second.won; acc.shPlayed += second.played;
       const state = h.fh > h.ofh ? "lead" : h.fh < h.ofh ? "trail" : "tied";
       acc[state].n++; if (won) acc[state].wins++;
       if (h.final != null && h.ofinal != null && Math.abs(h.final - h.ofinal) <= 3) { acc.close.n++; if (won) acc.close.wins++; }
       if ((h.ot || 0) + (h.oot || 0) > 0) { acc.ot.n++; if (won) acc.ot.wins++; }
       if (m.start_side) {
         acc.sided++;
-        const first = { won: h.fh, played: h.fh + h.ofh }, second = { won: h.sh || 0, played: (h.sh || 0) + (h.osh || 0) };
         const ct = m.start_side === "CT" ? first : second, t = m.start_side === "CT" ? second : first;
         acc.ctWon += ct.won; acc.ctPlayed += ct.played; acc.tWon += t.won; acc.tPlayed += t.played;
       }
     }
     const rate = (o) => (o.n ? (100 * o.wins) / o.n : null);
+    const pctOf = (won, played, min) => (played >= min ? (100 * won) / played : null);
     return {
       n: acc.n, winrate: rate({ n: acc.n, wins: acc.wins }), halves: acc.halves, sided: acc.sided,
       startCT: { ...acc.startCT, rate: rate(acc.startCT) }, startT: { ...acc.startT, rate: rate(acc.startT) },
-      ctPct: acc.ctPlayed >= 24 ? (100 * acc.ctWon) / acc.ctPlayed : null, tPct: acc.tPlayed >= 24 ? (100 * acc.tWon) / acc.tPlayed : null,
+      ctPct: pctOf(acc.ctWon, acc.ctPlayed, SIDE_MIN_ROUNDS), tPct: pctOf(acc.tWon, acc.tPlayed, SIDE_MIN_ROUNDS),
+      ctPlayed: acc.ctPlayed, tPlayed: acc.tPlayed,
+      fhPct: pctOf(acc.fhWon, acc.fhPlayed, 48), shPct: pctOf(acc.shWon, acc.shPlayed, 40),
       lead: { ...acc.lead, rate: rate(acc.lead) }, trail: { ...acc.trail, rate: rate(acc.trail) }, tied: { ...acc.tied, rate: rate(acc.tied) },
       close: { ...acc.close, rate: rate(acc.close) }, ot: { ...acc.ot, rate: rate(acc.ot) },
-      ctRating: mean(acc.ctRating), tRating: mean(acc.tRating), frating: mean(acc.frating),
+      ctRating: mean(acc.ctRating), tRating: mean(acc.tRating), frating: mean(acc.frating), rating: mean(acc.rating),
     };
   }
 
-  function mapPlanAdvice(map, s, who) {
-    const me = who === "me", out = [];
-    const they = me ? "you" : "they", Their = me ? "Your" : "Their", their = me ? "your" : "their", They = me ? "You" : "They";
-    const per12 = (pct) => Math.round((pct / 100) * 12 * 10) / 10;
-    const add = (weight, kind, text) => out.push({ weight, kind, text });
-    // 1. side bias in round-win %
-    if (s.ctPct != null && s.tPct != null && s.sided >= PLAN_MIN && Math.abs(s.tPct - s.ctPct) >= 10) {
-      const tSided = s.tPct > s.ctPct, strong = tSided ? "T" : "CT", weak = tSided ? "CT" : "T";
-      const sR = per12(tSided ? s.tPct : s.ctPct), wR = per12(tSided ? s.ctPct : s.tPct);
-      add(Math.abs(s.tPct - s.ctPct) / 10, "side", me
-        ? `You're ${strong}-sided on ${map}: ${sR} of 12 rounds on ${strong} vs ${wR} on ${weak}. Your ${weak} half is where ${map} is lost – review your ${weak === "CT" ? "CT setups, rotations and retakes" : "T defaults and executes"} there.`
-        : `${Their} teams are ${strong}-sided on ${map}: ${sR} of 12 rounds on ${strong} vs ${wR} on ${weak}. Against ${their} ${strong} half expect ~${Math.round(12 - sR)} rounds for you; ${their} ${weak} half is where to bank rounds (~${Math.round(12 - wR)} expected) – ${weak === "CT" ? "attack fast and with full utility" : "hold your setups and wait for their mistakes"}. If you start ${tSided ? "CT" : "T"}, losing that first half ${Math.round(12 - sR)}–${12 - Math.round(12 - sR)} is par for this matchup – anything better puts you ahead at the switch.`);
+  /** Strengths and weaknesses for one map: { title, detail, action, weight } each. */
+  function mapInsights(map, ms, s, o, coachMap) {
+    const S = [], W = [];
+    const add = (arr, weight, title, detail, action) => arr.push({ weight, title, detail, action: action || null });
+    const pc = (v) => `${Math.round(v)}%`, r12 = (v) => ((v / 100) * 12).toFixed(1);
+
+    // results on this map vs your average
+    if (s.n >= 5 && s.winrate != null && o.winrate != null) {
+      const diff = s.winrate - o.winrate;
+      if (diff >= 10) add(S, diff / 10, "Win rate above your average", `${pc(s.winrate)} on ${map} vs ${pc(o.winrate)} overall (${s.n} games).`);
+      else if (diff <= -10) add(W, -diff / 10, "Win rate below your average", `${pc(s.winrate)} on ${map} vs ${pc(o.winrate)} overall (${s.n} games).`,
+        `Put focused practice into ${map}, or make it an early ban until it improves.`);
     }
-    // 2. starting side
+    // your own rating here vs your average
+    if (s.frating != null && o.frating != null && s.n >= 5) {
+      const diff = s.frating - o.frating;
+      if (diff >= 0.1) add(S, diff * 8, "You play your best here", `FACEIT rating ${s.frating.toFixed(2)} on ${map} vs ${o.frating.toFixed(2)} overall.`);
+      else if (diff <= -0.1) add(W, -diff * 8, "Your own impact drops here", `FACEIT rating ${s.frating.toFixed(2)} on ${map} vs ${o.frating.toFixed(2)} overall.`,
+        `Watch one of your own ${map} demos and note where you die first – usually the same 2–3 spots.`);
+    }
+    // team rounds per side
+    if (s.ctPct != null && s.tPct != null && s.sided >= 3 && Math.abs(s.tPct - s.ctPct) >= 10) {
+      const tSided = s.tPct > s.ctPct, strong = tSided ? "T" : "CT", weak = tSided ? "CT" : "T";
+      const sR = r12(tSided ? s.tPct : s.ctPct), wR = r12(tSided ? s.ctPct : s.tPct), games = s.sided;
+      add(S, Math.abs(s.tPct - s.ctPct) / 12, `Strong ${strong} side`, `${sR} of 12 rounds won on ${strong} vs ${wR} on ${weak} (${games} game${games === 1 ? "" : "s"} with side data).`);
+      add(W, Math.abs(s.tPct - s.ctPct) / 10, `Weak ${weak} side`, `Only ${wR} of 12 rounds won on ${weak} vs ${sR} on ${strong}.`,
+        weak === "CT" ? `Review your CT setups on ${map}: play crossfires, delay with utility and retake together instead of dying alone on site.`
+                      : `Agree on 1–2 T defaults/executes for ${map} and arrive on site with full utility – trade the entry, don't trickle in.`);
+    }
+    // starting side
     if (s.startCT.n >= PLAN_MIN && s.startT.n >= PLAN_MIN && Math.abs(s.startCT.rate - s.startT.rate) >= 20) {
       const better = s.startCT.rate > s.startT.rate ? "CT" : "T", worse = better === "CT" ? "T" : "CT";
       const b = Math.round(better === "CT" ? s.startCT.rate : s.startT.rate), w = Math.round(better === "CT" ? s.startT.rate : s.startCT.rate);
-      add(Math.abs(b - w) / 20, "start", me
-        ? `You win ${b}% of ${map} games starting ${better} vs ${w}% starting ${worse} – take the ${better} start when you get side choice.`
-        : `${They} win ${b}% of ${map} games starting ${better} vs ${w}% starting ${worse}. If you have side choice, start ${better} yourself so they start ${worse}.`);
+      add(S, (b - w) / 25, `Better starting ${better}`, `${b}% won starting ${better} vs ${w}% starting ${worse}.`);
+      add(W, (b - w) / 25, `Struggle when starting ${worse}`, `Only ${w}% won starting ${worse} vs ${b}% starting ${better}.`,
+        `Take the ${better} start on ${map} when you get side choice.`);
     }
-    // 3. comebacks
-    if (s.trail.n >= PLAN_MIN && s.trail.rate <= 20)
-      add((25 - s.trail.rate) / 15, "trail", me
-        ? `You win only ${Math.round(s.trail.rate)}% of ${map} games when trailing at half (${s.trail.n} games). Use halftime to reset: name what isn't working and change your default for the second half.`
-        : `${They} win only ${Math.round(s.trail.rate)}% of ${map} games when trailing at half (${s.trail.n} games) – an early lead breaks them. Play for a strong first half.`);
-    if (s.trail.n >= PLAN_MIN && s.trail.rate >= 45)
-      add((s.trail.rate - 40) / 15, "comeback", me
-        ? `You come back from a halftime deficit ${Math.round(s.trail.rate)}% of the time on ${map} – a strength; keep trusting it.`
-        : `Dangerous comeback team on ${map}: ${they} win ${Math.round(s.trail.rate)}% of games when trailing at half. Never relax with a halftime lead.`);
-    // 4. holding a lead
-    if (s.lead.n >= PLAN_MIN && s.lead.rate <= 60)
-      add((65 - s.lead.rate) / 15, "lead", me
-        ? `You only convert ${Math.round(s.lead.rate)}% of halftime leads on ${map} (${s.lead.n} games). Don't switch off in the second half – keep the economy disciplined and play your defaults.`
-        : `${They} throw leads on ${map}: only ${Math.round(s.lead.rate)}% of games won after leading at half (${s.lead.n} games). Keep fighting even if you're behind at the switch.`);
-    // 5. close games and overtime
-    if (s.close.n >= PLAN_MIN && s.close.rate <= 30)
-      add((35 - s.close.rate) / 15, "close", me
-        ? `You lose close ${map} games: ${Math.round(s.close.rate)}% won when decided by ≤ 3 rounds (${s.close.n} games). Work on late-round calls and saving/forcing decisions.`
-        : `${They} struggle in close ${map} games: ${Math.round(s.close.rate)}% won when decided by ≤ 3 rounds. Keep it tight – pressure tells late.`);
-    if (s.ot.n >= 3)
-      add(0.3, "ot", `${me ? "Your" : Their} overtime record on ${map}: ${s.ot.wins} won of ${s.ot.n}.`);
-    // 6. the player's own side ratings (Leetify)
+    // first half vs second half
+    if (s.fhPct != null && s.shPct != null && Math.abs(s.fhPct - s.shPct) >= 8) {
+      if (s.shPct < s.fhPct)
+        add(W, (s.fhPct - s.shPct) / 10, "Second halves drop off", `${pc(s.fhPct)} of first-half rounds won vs ${pc(s.shPct)} after the switch.`,
+          `Opponents adapt to you at halftime – change your defaults and setups for the second half on ${map}.`);
+      else add(S, (s.shPct - s.fhPct) / 10, "You adapt well at halftime", `${pc(s.shPct)} of second-half rounds won vs ${pc(s.fhPct)} in the first half.`);
+    }
+    // halftime situations
+    if (s.lead.n >= PLAN_MIN) {
+      if (s.lead.rate >= 90) add(S, 0.6, "Closes out leads", `${pc(s.lead.rate)} won after leading at half (${s.lead.n} games).`);
+      else if (s.lead.rate <= 60) add(W, (65 - s.lead.rate) / 15, "Throws halftime leads", `Only ${pc(s.lead.rate)} won after leading at half (${s.lead.n} games).`,
+        "Stay disciplined after the switch: keep your economy together and play your defaults instead of forcing.");
+    }
+    if (s.trail.n >= PLAN_MIN) {
+      if (s.trail.rate >= 40) add(S, (s.trail.rate - 30) / 15, "Comes back from deficits", `${pc(s.trail.rate)} won when trailing at half (${s.trail.n} games).`);
+      else if (s.trail.rate <= 20) add(W, (25 - s.trail.rate) / 15, "Rarely comes back", `${pc(s.trail.rate)} won when trailing at half (${s.trail.n} games).`,
+        "Use halftime to reset: name what isn't working and change the default for the second half.");
+    }
+    if (s.close.n >= PLAN_MIN) {
+      if (s.close.rate >= 60) add(S, (s.close.rate - 50) / 15, "Wins close games", `${pc(s.close.rate)} of games decided by ≤ 3 rounds won (${s.close.n} games).`);
+      else if (s.close.rate <= 30) add(W, (35 - s.close.rate) / 15, "Loses close games", `${pc(s.close.rate)} of games decided by ≤ 3 rounds won (${s.close.n} games).`,
+        "Work on late-round calls: when to save, when to force, and who takes the last duel.");
+    }
+    if (s.ot.n >= 3) add(s.ot.wins / s.ot.n >= 0.5 ? S : W, 0.3, "Overtime record", `${s.ot.wins} won of ${s.ot.n} overtimes.`);
+    // your own side ratings here (Leetify)
     if (s.ctRating != null && s.tRating != null && Math.abs(s.ctRating - s.tRating) >= 3) {
       const weak = s.ctRating < s.tRating ? "CT" : "T", strong = weak === "CT" ? "T" : "CT";
-      add(Math.abs(s.ctRating - s.tRating) / 6, "player", me
-        ? `Your own ${weak}-side play is the weak point on ${map}: Leetify rating ${r1(weak === "CT" ? s.ctRating : s.tRating)} on ${weak} vs ${r1(weak === "CT" ? s.tRating : s.ctRating)} on ${strong}.`
-        : `He is much weaker on ${weak} on ${map} (Leetify rating ${r1(weak === "CT" ? s.ctRating : s.tRating)} vs ${r1(weak === "CT" ? s.tRating : s.ctRating)}) – target him in the half he plays ${weak}.`);
+      const wv = weak === "CT" ? s.ctRating : s.tRating, sv = weak === "CT" ? s.tRating : s.ctRating;
+      add(S, Math.abs(sv - wv) / 8, `Your ${strong}-side play`, `Leetify rating ${r1(sv)} on ${strong} vs ${r1(wv)} on ${weak}.`);
+      add(W, Math.abs(sv - wv) / 6, `Your ${weak}-side play`, `Leetify rating ${r1(wv)} on ${weak} vs ${r1(sv)} on ${strong}.`,
+        weak === "CT" ? "Pick one CT position on this map and learn it properly: the angles, the utility to delay, and when to fall back."
+                      : "On T, stop taking the first duel dry – go in behind a flash or let your entry take it and trade.");
     }
-    return out.sort((a, b) => b.weight - a.weight);
+    // recent form on this map
+    if (ms.length >= 8) {
+      const recent = ms.slice(0, 4), older = ms.slice(4);
+      const wr = (xs) => { const dd = xs.filter((m) => m.outcome === "win" || m.outcome === "loss"); return dd.length ? (100 * dd.filter((m) => m.outcome === "win").length) / dd.length : null; };
+      const a = wr(recent), b = wr(older);
+      if (a != null && b != null && Math.abs(a - b) >= 30)
+        add(a > b ? S : W, Math.abs(a - b) / 40, a > b ? "Improving here" : "Recent slump here",
+          `${pc(a)} won in your last ${recent.length} games on ${map} vs ${pc(b)} before.`,
+          a > b ? null : `Something changed recently – compare a recent ${map} demo with an older win.`);
+    }
+    // per-map comparisons from map coaching (utility, trades, entries, survival, aim)
+    if (coachMap) {
+      for (const t of coachMap.allTips || coachMap.tips)
+        if (!["t_side", "ct_side"].includes(t.key)) add(W, t.gap * 3, KEY_TITLES[t.key] || "Compared with your other maps", t.text);
+      for (const g of coachMap.strengths) add(S, g.gap * 3, g.title, g.text);
+    }
+    const byWeight = (a, b) => b.weight - a.weight;
+    return { strengths: S.sort(byWeight).slice(0, 6), weaknesses: W.sort(byWeight).slice(0, 6) };
   }
+  const KEY_TITLES = { util_pr: "Utility usage", flash_eff: "Flash effectiveness", flash_team: "Team flashes", util_death: "Unused utility",
+    he_dmg: "HE damage", util_dmg: "Utility damage", entry_success: "Entry duels", trade: "Trading teammates", traded: "Getting traded",
+    survival: "Survival", preaim: "Crosshair placement", team: "Team results vs your own play" };
 
-  function mapPlan(d, who = "me") {
+  function mapPlan(d) {
     const byMap = {};
     for (const m of d.matches || []) if (isActiveDuty(m.map)) (byMap[m.map] ||= []).push(m);
     const all = Object.values(byMap).flat();
     const overall = mapSides(all);
+    const coach = mapCoaching(d);
+    const coachBy = Object.fromEntries((coach.maps || []).map((m) => [m.map, m]));
     const maps = Object.entries(byMap).filter(([, ms]) => ms.length >= 3)
-      .map(([map, ms]) => { const s = mapSides(ms); return { map, stats: s, advice: mapPlanAdvice(map, s, who) }; })
+      .map(([map, ms]) => { const s = mapSides(ms); return { map, stats: s, ...mapInsights(map, ms, s, overall, coachBy[map]) }; })
       .sort((a, b) => b.stats.n - a.stats.n);
-    const faceitMs = all.filter((m) => m.source === "faceit");
-    const coverage = { faceit: faceitMs.length, halves: all.filter((m) => m.halves).length, sides: all.filter((m) => m.start_side).length };
+    const coverage = { faceit: all.filter((m) => m.source === "faceit").length, halves: all.filter((m) => m.halves).length,
+      sides: all.filter((m) => m.start_side).length, sidedHalves: all.filter((m) => m.start_side && m.halves).length };
     const missing = [];
     if (!coverage.halves) missing.push(d.faceit?.available ? "FACEIT returned no half scores for these matches." : "Half scores come from FACEIT – sign in (or add a FACEIT key) to see side splits, halftime and close-game records.");
     if (!coverage.sides) missing.push("Starting side comes from Leetify – without a Leetify profile, rounds can't be split into CT and T.");
-    return { available: maps.length > 0, reason: "Needs at least 3 matches on an Active Duty map.", who, maps, overall, coverage, missing };
+    else if (coverage.sidedHalves < coverage.halves)
+      missing.push(`CT/T splits use the ${coverage.sidedHalves} matches that have both FACEIT half scores and a Leetify-recorded starting side – Leetify hasn't analysed the other ${coverage.halves - coverage.sidedHalves}.`);
+    return { available: maps.length > 0, reason: "Needs at least 3 matches on an Active Duty map.", maps, overall, coverage, missing };
   }
 
   return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool, mapPlan,

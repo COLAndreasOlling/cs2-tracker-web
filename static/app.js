@@ -494,75 +494,57 @@ function planSection(plan) {
 }
 
 /* ----------------------------------------------------------- map plan --- */
-try { state.planWho = localStorage.getItem("cs2tracker.planWho") || "me"; } catch { state.planWho = "me"; }
-const PLAN_HINT = 8;
-
 function drawMapPlan(d) {
   const el = $("#planCard");
-  const plan = Analysis.mapPlan(d, state.planWho);
-  const me = state.planWho === "me";
-  const toggle = `<div class="tabs" id="planWho" role="group" aria-label="Perspective">
-      <button data-who="me" class="${me ? "on" : ""}">My plan</button><button data-who="opp" class="${me ? "" : "on"}">Anti-strat this player</button></div>`;
-  if (!plan.available) { el.innerHTML = `<div class="card-head"><h2>Map plan</h2>${toggle}</div><div class="empty">${esc(plan.reason)}</div>`; bindPlan(d); return; }
+  const plan = Analysis.mapPlan(d);
+  if (!plan.available) { el.innerHTML = `<h2>Map plan</h2><div class="empty">${esc(plan.reason)}</div>`; return; }
   const sel = state.planMap && plan.maps.some((m) => m.map === state.planMap) ? state.planMap : plan.maps[0].map;
-  const m = plan.maps.find((x) => x.map === sel), s = m.stats, o = plan.overall;
+  const m = plan.maps.find((x) => x.map === sel), o = plan.overall;
   const r12 = (v) => ((v / 100) * 12).toFixed(1), pc = (v) => `${Math.round(v)}%`;
-  // heat cell: tinted by distance from the player's own average (green = better, red = worse); text stays text-colored
-  const heat = (v, avg, n, f, minN = 4) => {
+  // heat cell: tinted by distance from your own average (green = better, red = worse); text stays text-colored
+  const heat = (v, avg, n, f, minN = 4, note = "") => {
     if (v == null || (n != null && n < minN)) return `<td class="n muted" title="${n != null ? `${n} games – too few` : "no data"}">–</td>`;
     const diff = avg == null ? 0 : v - avg, a = Math.min(45, Math.abs(diff) * 2.2);
     const bg = Math.abs(diff) < 3 ? "transparent" : `color-mix(in srgb, var(${diff > 0 ? "--div-pos" : "--div-neg"}) ${a}%, transparent)`;
-    return `<td class="n heat" style="background:${bg}" title="${diff >= 0 ? "+" : ""}${diff.toFixed(0)} vs average${n != null ? ` · ${n} games` : ""}">${f(v)}</td>`;
+    return `<td class="n heat" style="background:${bg}" title="${diff >= 0 ? "+" : ""}${diff.toFixed(0)} vs your average${n != null ? ` · ${n} games` : ""}">${f(v)}${note}</td>`;
   };
+  const halvesNote = (halves, rounds) => `<span class="nsub" title="from ${halves} ${halves === 1 ? "half" : "halves"} (${rounds} rounds)${halves < 3 ? " – very small sample" : ""}">${halves}</span>`;
+  // side cells: fewer than 3 halves is an anecdote, so show it greyed out and untinted
+  const sideCell = (v, avg, t, played) => (v != null && t.sided < 3
+    ? `<td class="n thin" title="only ${t.sided} ${t.sided === 1 ? "half" : "halves"} – too few to call a pattern">${r12(v)}${halvesNote(t.sided, played)}</td>`
+    : heat(v, avg, null, r12, 4, v != null ? halvesNote(t.sided, played) : ""));
   const avgCell = (v, f) => `<td class="n">${v == null ? "–" : f(v)}</td>`;
-  const overview = `<div class="table-wrap"><table class="heattable"><thead><tr><th>Map</th><th class="n">Games</th><th class="n">Win %</th>
-      <th class="n" title="Rounds won per 12 on CT">CT /12</th><th class="n" title="Rounds won per 12 on T">T /12</th>
+  const table = `<div class="table-wrap"><table class="heattable"><thead><tr><th>Map</th><th class="n">Games</th><th class="n">Win %</th>
+      <th class="n" title="Rounds won per 12 on CT; the small number is how many halves it's based on">CT /12</th><th class="n" title="Rounds won per 12 on T; the small number is how many halves it's based on">T /12</th>
       <th class="n">Start CT</th><th class="n">Start T</th><th class="n">Lead held</th><th class="n">Comebacks</th><th class="n">Close games</th></tr></thead><tbody>
-    ${plan.maps.map((x) => { const t = x.stats; return `<tr class="${x.map === sel ? "sel" : ""}" data-map="${esc(x.map)}" style="cursor:pointer">
+    ${plan.maps.map((x) => { const t = x.stats; return `<tr class="${x.map === sel ? "sel" : ""}" data-map="${esc(x.map)}" tabindex="0" title="Show strengths and weaknesses on ${esc(x.map)}">
       <td><b>${esc(x.map)}</b></td><td class="n">${t.n}</td>${heat(t.winrate, o.winrate, t.n, pc, 3)}
-      ${heat(t.ctPct, o.ctPct, null, r12)}${heat(t.tPct, o.tPct, null, r12)}
+      ${sideCell(t.ctPct, o.ctPct, t, t.ctPlayed)}${sideCell(t.tPct, o.tPct, t, t.tPlayed)}
       ${heat(t.startCT.rate, o.startCT.rate, t.startCT.n, pc)}${heat(t.startT.rate, o.startT.rate, t.startT.n, pc)}
       ${heat(t.lead.rate, o.lead.rate, t.lead.n, pc)}${heat(t.trail.rate, o.trail.rate, t.trail.n, pc)}${heat(t.close.rate, o.close.rate, t.close.n, pc)}</tr>`; }).join("")}
     <tr class="avg"><td>All maps</td><td class="n">${o.n}</td>${avgCell(o.winrate, pc)}${avgCell(o.ctPct, r12)}${avgCell(o.tPct, r12)}
       ${avgCell(o.startCT.rate, pc)}${avgCell(o.startT.rate, pc)}${avgCell(o.lead.rate, pc)}${avgCell(o.trail.rate, pc)}${avgCell(o.close.rate, pc)}</tr>
     </tbody></table></div>`;
-  const sideBar = (label, pct, cls) => `<div class="side-row"><span class="side-lbl">${label}</span><div class="track"><div class="fill ${cls}" style="width:${pct == null ? 0 : pct}%"></div><div class="mid"></div></div>
-      <span class="val">${pct == null ? "–" : `${r12(pct)} <span class="muted" style="font-weight:400">/12</span>`}</span></div>`;
-  const rate = (lbl, x) => `<div class="row"><span>${lbl}</span><b>${x.n ? `${Math.round(x.rate)}% <span class="muted" style="font-weight:400">of ${x.n}</span>` : "–"}</b></div>`;
-  const detail = `
-    <div class="grid g3" style="margin:16px 0 0">
-      <div class="card flat"><h2>Sides on ${esc(sel)}</h2><div class="sub">Rounds won per 12-round half${s.sided ? ` · ${s.sided} games with side and half scores` : ""}</div>
-        ${sideBar("CT", s.ctPct, "ct")}${sideBar("T", s.tPct, "t")}
-        <div class="statlist" style="margin-top:8px">${rate("Win % starting CT", s.startCT)}${rate("Win % starting T", s.startT)}</div></div>
-      <div class="card flat"><h2>Halftime</h2><div class="sub">Win % by score at the switch</div><div class="statlist">
-        ${rate("Leading at half", s.lead)}${rate("Tied 6–6", s.tied)}${rate("Trailing at half", s.trail)}${rate("Close games (≤ 3 rounds)", s.close)}${rate("Overtime", s.ot)}</div></div>
-      <div class="card flat"><h2>${me ? "You" : "The player"} on ${esc(sel)}</h2><div class="sub">Individual side ratings</div><div class="statlist">
-        <div class="row"><span>Leetify rating on CT</span><b>${s.ctRating == null ? "–" : signed(s.ctRating, 2)}</b></div>
-        <div class="row"><span>Leetify rating on T</span><b>${s.tRating == null ? "–" : signed(s.tRating, 2)}</b></div>
-        <div class="row"><span>FACEIT rating</span><b>${s.frating == null ? "–" : fmt(s.frating, 2)}</b></div>
-        <div class="row"><span>Win rate</span><b>${pc(s.winrate)} <span class="muted" style="font-weight:400">of ${s.n}</span></b></div></div></div>
-    </div>
-    <h2 style="margin:18px 0 8px">${me ? `What to adjust on ${esc(sel)}` : `How to play against them on ${esc(sel)}`}</h2>
-    ${m.advice.length ? `<ul class="ins-list">${m.advice.map((a) => `<li><span class="ic" style="background:${css(me ? "--warn" : "--series-1")}" aria-hidden="true">${me ? "!" : "→"}</span><span>${esc(a.text)}</span><span></span></li>`).join("")}</ul>`
-      : `<div class="empty" style="padding:12px 0">No clear side or halftime pattern on ${esc(sel)} yet${s.halves < PLAN_HINT ? ` – only ${s.halves} games with half scores` : ""}.</div>`}`;
+  const list = (items, good) => items.length
+    ? `<ul class="ins-list">${items.map((i) => `<li><span class="ic" style="background:${css(good ? "--good" : "--bad")}" aria-label="${good ? "strength" : "weakness"}">${good ? "+" : "−"}</span>
+        <span><b>${esc(i.title)}</b><span class="ref" style="font-size:12px;color:var(--text-secondary)">${esc(i.detail)}</span>${i.action ? `<span class="ref">→ ${esc(i.action)}</span>` : ""}</span><span></span></li>`).join("")}</ul>`
+    : `<div class="empty" style="padding:12px 0">${good ? "Nothing clearly above your average here yet." : "No clear weak spots here compared with your average."}</div>`;
   el.innerHTML = `
-    <div class="card-head"><div><h2>${me ? "Your sides, halves and comebacks per map" : "This player's team patterns per map"}</h2>
-      <div class="sub">Team results from FACEIT half scores; starting side from Leetify. Cells are tinted against ${me ? "your" : "their"} own average – green better, red worse; "–" means too few games. Click a map for details.</div></div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${toggle}
-      <select id="planSel" aria-label="Map">${plan.maps.map((x) => `<option value="${esc(x.map)}" ${x.map === sel ? "selected" : ""}>${esc(x.map)} (${x.stats.n})</option>`).join("")}</select></div></div>
+    <h2>Your sides, halves and comebacks per map</h2>
+    <div class="sub">Team results from FACEIT half scores; starting side from Leetify. Cells are tinted against your own average – green better, red worse; "–" means too few games. Click a map to see its strengths and weaknesses.</div>
     ${plan.missing.length ? `<div class="notice">${plan.missing.map(esc).join("<br>")}</div>` : ""}
-    ${overview}${detail}
-    <p class="muted" style="font-size:12px;margin:12px 0 0">Coverage: half scores for ${plan.coverage.halves} and starting side for ${plan.coverage.sides} of ${plan.overall.n} Active Duty matches. These are team results – they describe the player's teams, which matters most for regular stacks.</p>`;
-  bindPlan(d);
-}
-
-function bindPlan(d) {
-  $("#planWho")?.querySelectorAll("button").forEach((b) => (b.onclick = () => {
-    state.planWho = b.dataset.who; try { localStorage.setItem("cs2tracker.planWho", state.planWho); } catch {}
-    drawMapPlan(d);
-  }));
-  const sel = $("#planSel"); if (sel) sel.onchange = () => { state.planMap = sel.value; drawMapPlan(d); };
-  document.querySelectorAll("#planCard tr[data-map]").forEach((tr) => (tr.onclick = () => { state.planMap = tr.dataset.map; drawMapPlan(d); }));
+    ${table}
+    <div class="card-head" style="margin-top:20px"><h2>${esc(sel)} · ${m.stats.n} games</h2><span class="muted" style="font-size:12px">Compared with your other Active Duty maps and your average</span></div>
+    <div class="grid g2" style="margin:8px 0 0">
+      <div><div class="prio-do" style="margin-bottom:6px">Strengths</div>${list(m.strengths, true)}</div>
+      <div><div class="prio-do" style="margin-bottom:6px">Weaknesses &amp; what to do</div>${list(m.weaknesses, false)}</div>
+    </div>
+    <p class="muted" style="font-size:12px;margin:14px 0 0">Coverage: half scores for ${plan.coverage.halves} and starting side for ${plan.coverage.sides} of ${o.n} Active Duty matches. Side, halftime and comeback numbers are team results.</p>`;
+  el.querySelectorAll("tr[data-map]").forEach((tr) => {
+    const pick = () => { state.planMap = tr.dataset.map; drawMapPlan(d); };
+    tr.onclick = pick;
+    tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+  });
 }
 
 const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",
@@ -587,7 +569,7 @@ function drawCoaching(c) {
       <div>
         ${m.tips.length ? `<ul class="ins-list">${m.tips.map((t) => `<li><span class="ic" style="background:${css("--warn")}" aria-label="tip">!</span><span>${esc(t.text)}</span><span></span></li>`).join("")}</ul>`
           : `<div class="empty" style="padding:12px 0">No clear weak spots on ${esc(sel)} compared with your other maps.</div>`}
-        ${m.strengths.length ? `<p class="muted" style="font-size:12px;margin-top:12px">Better on ${esc(sel)} than elsewhere: ${m.strengths.map((k) => esc(COACH_LABELS[k] || k)).join(", ")}.</p>` : ""}
+        ${m.strengths.length ? `<p class="muted" style="font-size:12px;margin-top:12px">Better on ${esc(sel)} than elsewhere: ${m.strengths.map((g) => esc(g.title.toLowerCase())).join(", ")}.</p>` : ""}
       </div>
       <div class="table-wrap"><table><thead><tr><th>${esc(sel)} · ${p.n} matches</th><th class="n">This map</th><th class="n">Other maps</th></tr></thead><tbody>
         ${row("Win rate", p.winrate, o.winrate, p0, "high")}
