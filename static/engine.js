@@ -14,7 +14,7 @@ const Engine = (() => {
   const CACHE_TTL = 120000;
   const CFG_KEY = "cs2tracker.config";
   const SNAP_KEY = "cs2tracker.snapshots";
-  const HALVES_KEY = "cs2tracker.halves"; // per-match half scores; a finished match never changes
+  const HALVES_KEY = "cs2tracker.matchstats.v2"; // per-match half scores + team rank; a finished match never changes
   const cache = new Map();
 
   class ApiError extends Error {
@@ -182,7 +182,29 @@ const Engine = (() => {
     try { raw.bans = (await faceitGet(`/players/${pid}/bans`, key, { limit: 20 })).items || []; }
     catch { raw.bans = null; } // unknown, not "no bans"
     raw.halves = await fetchHalves(raw.matches, pid, key);
+    try { // match history: line-ups with every player's level, start/finish times, match type
+      raw.history = [];
+      for (const offset of [0, 100]) {
+        const page = (await faceitGet(`/players/${pid}/history`, key, { game: "cs2", offset, limit: 100 })).items || [];
+        raw.history.push(...page);
+        if (page.length < 100) break;
+      }
+    } catch (e) { raw.errors.push(`match history: ${e.message}`); }
     return raw;
+  }
+
+  /** Context for one match from FACEIT's history: levels of both teams, teammates, timing, match type. */
+  function historyContext(h, pid) {
+    let mine = null, theirs = null;
+    for (const t of Object.values(h.teams || {})) {
+      if ((t.players || []).some((p) => p.player_id === pid)) mine = t; else theirs = t;
+    }
+    if (!mine || !theirs) return null;
+    const level = (t) => mean((t.players || []).map((p) => num(p.skill_level)));
+    const me = mine.players.find((p) => p.player_id === pid);
+    return { started: iso(h.started_at), finished: iso(h.finished_at), competition: h.competition_type || null, competitionName: h.competition_name || null,
+      myLevel: num(me?.skill_level), teamLevel: level(mine), oppLevel: level(theirs),
+      teammates: mine.players.filter((p) => p.player_id !== pid).map((p) => ({ id: p.player_id, nick: p.nickname })) };
   }
 
   /** The player's team's half scores for one match, from FACEIT's match stats. */
@@ -193,8 +215,15 @@ const Engine = (() => {
     const other = teams.find((t) => t !== mine);
     if (!mine || !other) return null;
     const t = (x, k) => num(pick(x.team_stats || {}, k));
+    const ps = (p, k) => num(pick(p.player_stats || {}, k), 0);
+    const team = mine.players || [], me = team.find((p) => p.player_id === pid);
+    const myK = ps(me, "Kills"), teamK = team.reduce((a, p) => a + ps(p, "Kills"), 0);
+    const dmg = (p) => ps(p, "Damage") || ps(p, "ADR"); // total damage if reported, ADR otherwise (same ranking)
+    const myD = dmg(me), teamD = team.reduce((a, p) => a + dmg(p), 0);
     return { fh: t(mine, "First Half Score"), sh: t(mine, "Second Half Score"), ot: t(mine, "Overtime score") ?? 0, final: t(mine, "Final Score"),
-      ofh: t(other, "First Half Score"), osh: t(other, "Second Half Score"), oot: t(other, "Overtime score") ?? 0, ofinal: t(other, "Final Score") };
+      ofh: t(other, "First Half Score"), osh: t(other, "Second Half Score"), oot: t(other, "Overtime score") ?? 0, ofinal: t(other, "Final Score"),
+      rank: 1 + team.filter((p) => p !== me && ps(p, "Kills") > myK).length, teamSize: team.length,
+      kshare: teamK ? myK / teamK : null, dshare: teamD ? myD / teamD : null };
   }
 
   /** Half scores for the player's recent FACEIT matches: one call per match, cached for good. */
@@ -249,6 +278,7 @@ const Engine = (() => {
         adr: num(pick(st, "ADR")),
       };
     }
+    const ctxById = Object.fromEntries((raw.history || []).map((h) => [h.match_id, historyContext(h, p.player_id)]).filter(([, c]) => c));
     const matches = (raw.matches || []).map((it) => {
       const st = it.stats || it, result = pick(st, "Result");
       return {
@@ -262,6 +292,7 @@ const Engine = (() => {
         multi: faceitMulti(st),
         fx: Object.fromEntries(Object.entries(FACEIT_FX).map(([k, v]) => [k, num(pick(st, v))])),
         halves: raw.halves?.[pick(st, "Match Id")] || null,
+        ctx: ctxById[pick(st, "Match Id")] || null,
       };
     }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return {
@@ -384,6 +415,7 @@ const Engine = (() => {
         if (f && m.adr == null) m.adr = f.adr;
         if (f) m.faceit_stats = { kills: f.kills, deaths: f.deaths, rounds: f.rounds, multi: f.multi, fx: f.fx }; // FACEIT rating & role
         if (f?.halves) m.halves = f.halves;
+        if (f?.ctx) m.ctx = f.ctx;
       }
       out.push(...fc.matches.filter((m) => !seen.has(m.id)));
     }
@@ -559,6 +591,7 @@ const Engine = (() => {
       int: (lo, hi) => lo + Math.floor(next() * (hi - lo + 1)),
       choice: (xs) => xs[Math.floor(next() * xs.length)],
       gauss: (mu, sd) => mu + sd * Math.sqrt(-2 * Math.log(next() || 1e-9)) * Math.cos(2 * Math.PI * next()),
+      sample: (xs, n) => { const a = [...xs]; for (let k = a.length - 1; k > 0; k--) { const j = Math.floor(next() * (k + 1)); [a[k], a[j]] = [a[j], a[k]]; } return a.slice(0, n); },
       weighted: (xs, ws) => { let r = next() * ws.reduce((a, b) => a + b, 0); for (let i = 0; i < xs.length; i++) { r -= ws[i]; if (r <= 0) return xs[i]; } return xs[xs.length - 1]; },
     };
   }
@@ -568,6 +601,22 @@ const Engine = (() => {
 
   // Demo team tendencies by map: positive = T-sided (more rounds on the T half), negative = CT-sided.
   const DEMO_SIDE = { de_ancient: 2.2, de_nuke: -2.4, de_mirage: 0.6 };
+
+  const DEMO_NAMES = ["kraken", "Ninjaa", "s0rensen", "fluxx", "BlueBerry", "tomtom", "Raptor", "viggo", "mikkel_", "dRaGo", "pixl", "Hjort"];
+  const DEMO_DUO = { player_id: "duo", nickname: "duo_partner", skill_level: 8 };
+
+  /** Demo match times in sessions of 1-5 matches (~50 min apart), newest first, with each match's place in its session. */
+  function demoSessions(rnd, now, count) {
+    const out = [];
+    let t = now - 3 * 3600e3;
+    while (out.length < count) {
+      const size = rnd.int(2, 6), start = new Date(t); start.setHours(rnd.int(15, 23), rnd.int(0, 59));
+      const first = Math.min(start.getTime(), t);
+      for (let j = size - 1; j >= 0 && out.length < count; j--) out.push({ finished: first + j * 45 * 60e3 + 40 * 60e3, idx: j + 1 });
+      t = first - rnd.int(18, 40) * 3600e3;
+    }
+    return out;
+  }
 
   /** Split a demo final score into halves that respect MR12 and the map's side bias. */
   function splitHalves(rnd, mp, my, op, startCT) {
@@ -641,11 +690,19 @@ const Engine = (() => {
     const maps = ["de_mirage", "de_inferno", "de_ancient", "de_nuke", "de_anubis", "de_dust2", "de_cache"];
     const skill = { de_mirage: 0.15, de_inferno: 0.08, de_ancient: 0.0, de_nuke: -0.12, de_anubis: 0.05, de_dust2: 0.1, de_cache: -0.05 };
     const now = Date.now(), premier = 16480, elo = 1785;
-    const lMatches = [], lRecent = [], fItems = [], demoHalves = {};
+    const lMatches = [], lRecent = [], fItems = [], demoHalves = {}, history = [];
+    const sched = demoSessions(rnd, now, 100);
+    const mates = Array.from({ length: 30 }, (_, k) => ({ player_id: `mate-${k}`, nickname: DEMO_NAMES[k % DEMO_NAMES.length] + (k >= DEMO_NAMES.length ? k : ""), skill_level: 7 + (k % 3) }));
     for (let i = 0; i < 100; i++) {
-      const when = new Date(now - (i * 19 + rnd.int(0, 6)) * 3600e3);
+      const when = new Date(sched[i].finished), sessionIdx = sched[i].idx, hour = when.getHours();
       const mp = rnd.choice(maps), trend = ((100 - i) / 100) * 0.12; // gets better over time
-      const form = skill[mp] + trend + rnd.gauss(0, 0.25);
+      const duo = rnd.random() < 0.6; // demo player often queues with a duo partner
+      const teamLevel = 8 + rnd.gauss(0, 0.4), oppLevel = Math.max(4, Math.min(10, 8 + rnd.gauss(0, 0.9)));
+      const form = skill[mp] + trend + rnd.gauss(0, 0.25)
+        - 0.22 * Math.max(0, sessionIdx - 3) // tires after 3 matches in a row
+        - (hour >= 23 || hour < 4 ? 0.18 : 0) // worse late at night
+        - 0.2 * (oppLevel - teamLevel) // stronger lobbies are harder
+        + (duo ? 0.18 : 0); // better with the duo partner
       const rounds = rnd.int(16, 25); // MR12: 13 wins, loser max 12
       const win = form + rnd.gauss(0, 0.3) > -0.1;
       const [my, op] = win ? [13, Math.max(0, rounds - 13)] : [Math.max(0, rounds - 13), 13];
@@ -657,7 +714,18 @@ const Engine = (() => {
       const mk = demoMulti(rnd, kills);
       const startCT = rnd.random() < 0.5;
       const finished = when.toISOString();
-      if (fid) demoHalves[fid] = splitHalves(rnd, mp, my, op, startCT);
+      if (fid) {
+        const others = Array.from({ length: 4 }, () => Math.max(2, Math.round((my + op) * 0.7 + rnd.gauss(0, 4))));
+        const teamK = kills + others.reduce((a, b) => a + b, 0);
+        demoHalves[fid] = { ...splitHalves(rnd, mp, my, op, startCT), rank: 1 + others.filter((k) => k > kills).length, teamSize: 5,
+          kshare: kills / teamK, dshare: Math.max(0.05, Math.min(0.6, kills / teamK + rnd.gauss(0, 0.02))) };
+        const team = [DEMO_DUO, ...rnd.sample(mates, 4)].slice(duo ? 0 : 1, duo ? 4 : 5);
+        const opps = Array.from({ length: 5 }, (_, k) => ({ player_id: `opp-${i}-${k}`, nickname: `opponent${k + 1}`, skill_level: Math.max(1, Math.min(10, Math.round(oppLevel + rnd.gauss(0, 0.8)))) }));
+        history.push({ match_id: fid, started_at: Math.round((when.getTime() - 40 * 60e3) / 1000), finished_at: Math.round(when.getTime() / 1000),
+          competition_type: "matchmaking", competition_name: "5v5 Queue", results: { winner: win ? "faction1" : "faction2" },
+          teams: { faction1: { players: [{ player_id: "demo", nickname: "demo_player", skill_level: 8 }, ...team.map((t) => ({ ...t, skill_level: Math.max(1, Math.min(10, Math.round(teamLevel + rnd.gauss(0, 0.6)))) }))] },
+                   faction2: { players: opps } } });
+      }
       lMatches.push({
         id: mid, finished_at: finished, data_source: src, data_source_match_id: fid, map_name: mp, has_banned_player: false,
         team_scores: [{ team_number: startCT ? 3 : 2, score: my }, { team_number: startCT ? 2 : 3, score: op }],
@@ -697,7 +765,7 @@ const Engine = (() => {
         traded_deaths_success_percentage: 39.2, trade_kill_opportunities_per_round: 0.31, trade_kills_success_percentage: 58.3,
         utility_on_death_avg: 342.1 },
       recent_matches: lRecent, recent_teammates: [] } };
-    const faceit = { available: true, errors: [], matches: fItems, bans: [], halves: demoHalves,
+    const faceit = { available: true, errors: [], matches: fItems, bans: [], halves: demoHalves, history,
       player: { player_id: "demo", nickname: "demo_player", avatar: "", country: "dk", faceit_url: "https://www.faceit.com/{lang}/players/demo_player",
         games: { cs2: { faceit_elo: elo, skill_level: 8, game_player_id: DEMO_STEAM64, region: "EU" } } },
       stats: { lifetime: { Matches: "642", Wins: "347", "Win Rate %": "54", "Average K/D Ratio": "1.12", "Average Headshots %": "48",

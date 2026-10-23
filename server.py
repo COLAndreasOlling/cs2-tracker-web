@@ -253,10 +253,37 @@ def fetch_faceit(ident, cfg):
     except ApiError:
         raw["bans"] = None  # unknown, not "no bans"
     raw["halves"] = fetch_halves(raw["matches"], pid, key)
+    try:  # match history: line-ups with every player's level, start/finish times, match type
+        raw["history"] = []
+        for offset in (0, 100):
+            page = faceit_get(f"/players/{pid}/history", key, game="cs2", offset=offset, limit=100).get("items", [])
+            raw["history"] += page
+            if len(page) < 100:
+                break
+    except ApiError as e:
+        raw["errors"].append(f"match history: {e}")
     return raw
 
 
-HALVES_PATH = os.path.join(DATA, "halves.json")  # per-match half scores; a finished match never changes
+def history_context(h, pid):
+    """Context for one match from FACEIT's history: levels of both teams, teammates, timing, match type."""
+    mine = theirs = None
+    for t in (h.get("teams") or {}).values():
+        if any(p.get("player_id") == pid for p in t.get("players") or []):
+            mine = t
+        else:
+            theirs = t
+    if not mine or not theirs:
+        return None
+    level = lambda t: (lambda v: sum(v) / len(v) if v else None)([num(p.get("skill_level")) for p in t.get("players") or [] if num(p.get("skill_level")) is not None])
+    me = next(p for p in mine["players"] if p.get("player_id") == pid)
+    return {"started": iso(h.get("started_at")), "finished": iso(h.get("finished_at")),
+            "competition": h.get("competition_type"), "competitionName": h.get("competition_name"),
+            "myLevel": num(me.get("skill_level")), "teamLevel": level(mine), "oppLevel": level(theirs),
+            "teammates": [{"id": p.get("player_id"), "nick": p.get("nickname")} for p in mine["players"] if p.get("player_id") != pid]}
+
+
+HALVES_PATH = os.path.join(DATA, "matchstats_v2.json")  # per-match half scores + team rank; a finished match never changes
 _halves_lock = threading.Lock()
 
 
@@ -269,9 +296,17 @@ def halves_from_match_stats(ms, pid):
     if not mine or not other:
         return None
     t = lambda x, k: num(pick(x.get("team_stats") or {}, k))
+    ps = lambda p, k: num(pick(p.get("player_stats") or {}, k), 0)
+    team = mine.get("players") or []
+    me = next(p for p in team if p.get("player_id") == pid)
+    dmg = lambda p: ps(p, "Damage") or ps(p, "ADR")  # total damage if reported, ADR otherwise (same ranking)
+    my_k, team_k = ps(me, "Kills"), sum(ps(p, "Kills") for p in team)
+    my_d, team_d = dmg(me), sum(dmg(p) for p in team)
     return {"fh": t(mine, "First Half Score"), "sh": t(mine, "Second Half Score"), "ot": t(mine, "Overtime score") or 0,
             "final": t(mine, "Final Score"), "ofh": t(other, "First Half Score"), "osh": t(other, "Second Half Score"),
-            "oot": t(other, "Overtime score") or 0, "ofinal": t(other, "Final Score")}
+            "oot": t(other, "Overtime score") or 0, "ofinal": t(other, "Final Score"),
+            "rank": 1 + sum(1 for p in team if p is not me and ps(p, "Kills") > my_k), "teamSize": len(team),
+            "kshare": my_k / team_k if team_k else None, "dshare": my_d / team_d if team_d else None}
 
 
 def fetch_halves(items, pid, key):
@@ -350,6 +385,7 @@ def normalize_faceit(raw):
             "hs": num(pick(st, "Average Headshots %", "Total Headshots %")),
             "adr": num(pick(st, "ADR")),
         }
+    ctx_by_id = {h.get("match_id"): c for h in raw.get("history") or [] if (c := history_context(h, p.get("player_id")))}
     matches = []
     for it in raw.get("matches", []):
         st = it.get("stats", it)
@@ -371,6 +407,7 @@ def normalize_faceit(raw):
             "multi": faceit_multi(st),
             "fx": faceit_extended(st),
             "halves": (raw.get("halves") or {}).get(pick(st, "Match Id")),
+            "ctx": ctx_by_id.get(pick(st, "Match Id")),
         })
     matches.sort(key=lambda m: m["date"] or "", reverse=True)
     recent = life.get("Recent Results") or []
@@ -551,6 +588,8 @@ def merge_matches(fc, lt):
                 m["faceit_stats"] = {k: f[k] for k in ("kills", "deaths", "rounds", "multi", "fx")}
                 if f.get("halves"):
                     m["halves"] = f["halves"]
+                if f.get("ctx"):
+                    m["ctx"] = f["ctx"]
         out += [m for m in fc["matches"] if m["id"] not in seen]
     out.sort(key=lambda m: m["date"] or "", reverse=True)
     return out
@@ -915,6 +954,22 @@ DEMO_T_SIDE = {"de_nuke": -0.035}  # ...and their T side is weak on Nuke
 
 # Demo team tendencies by map: positive = T-sided (more rounds on the T half), negative = CT-sided.
 DEMO_SIDE = {"de_ancient": 2.2, "de_nuke": -2.4, "de_mirage": 0.6}
+DEMO_NAMES = ["kraken", "Ninjaa", "s0rensen", "fluxx", "BlueBerry", "tomtom", "Raptor", "viggo", "mikkel_", "dRaGo", "pixl", "Hjort"]
+DEMO_DUO = {"player_id": "duo", "nickname": "duo_partner", "skill_level": 8}
+
+
+def demo_sessions(rnd, now, count):
+    """Demo match times in sessions of 1-5 matches (~50 min apart), newest first, with each match's place in its session."""
+    out, t = [], now - timedelta(hours=3)
+    while len(out) < count:
+        size = rnd.randint(2, 6)
+        local = t.astimezone()
+        start = min(t, local.replace(hour=rnd.randint(15, 23), minute=rnd.randint(0, 59)).astimezone(timezone.utc))
+        for j in range(size - 1, -1, -1):
+            if len(out) < count:
+                out.append((start + timedelta(minutes=j * 45 + 40), j + 1))
+        t = start - timedelta(hours=rnd.randint(18, 40))
+    return out
 
 
 def split_halves(rnd, mp, my, op, start_ct):
@@ -992,13 +1047,22 @@ def demo_raw():
     maps = ["de_mirage", "de_inferno", "de_ancient", "de_nuke", "de_anubis", "de_dust2", "de_cache"]
     skill = {"de_mirage": 0.15, "de_inferno": 0.08, "de_ancient": 0.0, "de_nuke": -0.12, "de_anubis": 0.05, "de_dust2": 0.1, "de_cache": -0.05}
     now = datetime.now(timezone.utc)
-    l_matches, l_recent, f_items, demo_halves = [], [], [], {}
+    l_matches, l_recent, f_items, demo_halves, history = [], [], [], {}, []
     premier, elo = 16480, 1785
+    sched = demo_sessions(rnd, now, 100)
+    mates = [{"player_id": f"mate-{k}", "nickname": DEMO_NAMES[k % len(DEMO_NAMES)] + (str(k) if k >= len(DEMO_NAMES) else ""), "skill_level": 7 + k % 3} for k in range(30)]
     for i in range(100):
-        when = now - timedelta(hours=i * 19 + rnd.randint(0, 6))
+        when, session_idx = sched[i]
+        hour = when.astimezone().hour
         mp = rnd.choice(maps)
         trend = (100 - i) / 100 * 0.12  # gets better over time
-        form = skill[mp] + trend + rnd.gauss(0, 0.25)
+        duo = rnd.random() < 0.6  # demo player often queues with a duo partner
+        team_level, opp_level = 8 + rnd.gauss(0, 0.4), max(4, min(10, 8 + rnd.gauss(0, 0.9)))
+        form = (skill[mp] + trend + rnd.gauss(0, 0.25)
+                - 0.22 * max(0, session_idx - 3)  # tires after 3 matches in a row
+                - (0.18 if hour >= 23 or hour < 4 else 0)  # worse late at night
+                - 0.2 * (opp_level - team_level)  # stronger lobbies are harder
+                + (0.18 if duo else 0))  # better with the duo partner
         rounds = rnd.randint(16, 25)  # MR12: 13 wins, loser max 12
         win = form + rnd.gauss(0, 0.3) > -0.1
         my, op = (13, max(0, rounds - 13)) if win else (max(0, rounds - 13), 13)
@@ -1012,7 +1076,17 @@ def demo_raw():
         mk = demo_multi(rnd, kills)
         start_ct = rnd.random() < 0.5
         if fid:
-            demo_halves[fid] = split_halves(rnd, mp, my, op, start_ct)
+            others = [max(2, round((my + op) * 0.7 + rnd.gauss(0, 4))) for _ in range(4)]
+            team_k = kills + sum(others)
+            demo_halves[fid] = {**split_halves(rnd, mp, my, op, start_ct), "rank": 1 + sum(1 for k in others if k > kills), "teamSize": 5,
+                                "kshare": kills / team_k, "dshare": max(0.05, min(0.6, kills / team_k + rnd.gauss(0, 0.02)))}
+            team = ([DEMO_DUO] + rnd.sample(mates, 3)) if duo else rnd.sample(mates, 4)
+            clamp_lv = lambda v: max(1, min(10, round(v)))
+            history.append({"match_id": fid, "started_at": int(when.timestamp()) - 40 * 60, "finished_at": int(when.timestamp()),
+                            "competition_type": "matchmaking", "competition_name": "5v5 Queue", "results": {"winner": "faction1" if win else "faction2"},
+                            "teams": {"faction1": {"players": [{"player_id": "demo", "nickname": "demo_player", "skill_level": 8}]
+                                                   + [{**t, "skill_level": clamp_lv(team_level + rnd.gauss(0, 0.6))} for t in team]},
+                                      "faction2": {"players": [{"player_id": f"opp-{i}-{k}", "nickname": f"opponent{k + 1}", "skill_level": clamp_lv(opp_level + rnd.gauss(0, 0.8))} for k in range(5)]}}})
         l_matches.append({
             "id": mid, "finished_at": when.isoformat().replace("+00:00", "Z"), "data_source": src,
             "data_source_match_id": fid, "map_name": mp, "has_banned_player": False,
@@ -1056,7 +1130,7 @@ def demo_raw():
                   "t_opening_duel_success_percentage": 44.1, "traded_deaths_success_percentage": 39.2,
                   "trade_kill_opportunities_per_round": 0.31, "trade_kills_success_percentage": 58.3, "utility_on_death_avg": 342.1},
         "recent_matches": l_recent, "recent_teammates": []}}
-    faceit = {"available": True, "errors": [], "matches": f_items, "bans": [], "halves": demo_halves,
+    faceit = {"available": True, "errors": [], "matches": f_items, "bans": [], "halves": demo_halves, "history": history,
               "player": {"player_id": "demo", "nickname": "demo_player", "avatar": "", "country": "dk",
                          "faceit_url": "https://www.faceit.com/{lang}/players/demo_player",
                          "games": {"cs2": {"faceit_elo": 1785, "skill_level": 8, "game_player_id": DEMO_STEAM64, "region": "EU"}}},

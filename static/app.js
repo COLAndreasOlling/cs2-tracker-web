@@ -257,6 +257,7 @@ function render(d) {
     <div class="tabs pagetabs" role="tablist">
       <button role="tab" data-page="summary">Summary</button>
       <button role="tab" data-page="mapplan">Map plan</button>
+      <button role="tab" data-page="lobbies">Sessions &amp; teammates</button>
       <button role="tab" data-page="integrity">Integrity check${integDot ? `<span class="tabdot" style="background:${css(integDot)}" aria-hidden="true"></span>` : ""}</button>
       <button role="tab" data-page="coaching">Coaching${tipCount ? `<span class="tabcount">${tipCount}</span>` : ""}</button>
     </div>
@@ -345,6 +346,11 @@ function render(d) {
     <div class="card" id="planCard" style="margin-bottom:16px"></div>
   </section>
 
+  <section class="page" data-page="lobbies" hidden>
+    <div class="section-title">Sessions, lobbies &amp; teammates</div>
+    <div id="lobbyCard"></div>
+  </section>
+
   <section class="page" data-page="integrity" hidden>
     <div class="section-title">Integrity check</div>
     ${integritySection(integ, d)}
@@ -369,7 +375,7 @@ function render(d) {
 }
 
 /* -------------------------------------------------------------- pages --- */
-const PAGES = ["summary", "mapplan", "integrity", "coaching"];
+const PAGES = ["summary", "mapplan", "lobbies", "integrity", "coaching"];
 
 function setupPages(d) {
   const bar = $("#pagebar");
@@ -379,6 +385,7 @@ function setupPages(d) {
     bar.querySelectorAll("[data-page]").forEach((b) => { const on = b.dataset.page === page; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
     if (page === "summary") { drawProgress(d); drawPremier(d); drawForm(d); } // charts need a visible width
     if (page === "mapplan") drawMapPlan(d);
+    if (page === "lobbies") drawLobbies(d);
     const u = new URL(location.href); u.searchParams.set("tab", page); history.replaceState(null, "", u);
     // when the bar is already stuck, start the new page at its top instead of mid-page
     if (fromClick && bar.classList.contains("stuck"))
@@ -545,6 +552,61 @@ function drawMapPlan(d) {
     tr.onclick = pick;
     tr.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
   });
+}
+
+/* ------------------------------------------------- sessions & teammates --- */
+function drawLobbies(d) {
+  const el = $("#lobbyCard"), L = Analysis.lobbies(d);
+  if (!L.available) { el.innerHTML = `<div class="card empty">${esc(L.reason)}</div>`; return; }
+  const pc = (v) => (v == null ? "–" : `${Math.round(v)}%`), f2 = (v) => (v == null ? "–" : v.toFixed(2));
+  const avg = L.overall;
+  // heat cell vs your overall: tinted green/red, text stays text-colored; small groups shown muted
+  const heat = (v, base, n, f, scale) => {
+    if (v == null || n < 5) return `<td class="n muted" title="${n} games – too few">${v == null ? "–" : f(v)}</td>`;
+    const diff = base == null ? 0 : v - base, a = Math.min(45, (Math.abs(diff) / scale) * 12);
+    const bg = Math.abs(diff) < scale * 0.25 ? "transparent" : `color-mix(in srgb, var(${diff > 0 ? "--div-pos" : "--div-neg"}) ${a}%, transparent)`;
+    return `<td class="n heat" style="background:${bg}">${f(v)}</td>`;
+  };
+  const table = (rows, first) => `<div class="table-wrap"><table class="heattable"><thead><tr><th>${first}</th><th class="n">Games</th><th class="n">Win %</th><th class="n">FACEIT rating</th><th class="n">K/D</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="n">${r.n}</td>${heat(r.winrate, avg.winrate, r.n, pc, 10)}${heat(r.rating, avg.rating, r.n, f2, 0.1)}${heat(r.kd, avg.kd, r.n, f2, 0.1)}</tr>`).join("")}
+    </tbody></table></div>`;
+  const list = (items, good) => items.length
+    ? `<ul class="ins-list">${items.map((i) => `<li><span class="ic" style="background:${css(good ? "--good" : "--bad")}" aria-label="${good ? "strength" : "weakness"}">${good ? "+" : "−"}</span>
+        <span><b>${esc(i.title)}</b><span class="ref" style="font-size:12px;color:var(--text-secondary)">${esc(i.detail)}</span>${i.action ? `<span class="ref">→ ${esc(i.action)}</span>` : ""}</span><span></span></li>`).join("")}</ul>`
+    : `<div class="empty" style="padding:12px 0">${good ? "Nothing stands out yet." : "No clear weak spots here."}</div>`;
+  const t = L.team;
+  const teamCard = t ? `<div class="statlist">
+      <div class="row"><span>Top fragger in your team</span><b>${pc(t.topFragRate)} <span class="muted" style="font-weight:400">of ${t.n} matches · 20% = average</span></b></div>
+      <div class="row"><span>Average place on the scoreboard</span><b>${t.avgRank.toFixed(1)} <span class="muted" style="font-weight:400">of 5</span></b></div>
+      <div class="row"><span>Share of your team's kills</span><b>${pc(100 * t.kshare)}</b></div>
+      <div class="row"><span>Share of your team's damage</span><b>${t.dshare == null ? "–" : pc(100 * t.dshare)}</b></div>
+      <div class="row"><span>Win % when you top-frag / when you don't</span><b>${pc(t.winTop)} / ${pc(t.winOther)}</b></div>
+      <div class="row"><span>Your kill share in wins / losses</span><b>${t.kshareWin == null ? "–" : pc(100 * t.kshareWin)} / ${t.kshareLoss == null ? "–" : pc(100 * t.kshareLoss)}</b></div>
+    </div>` : `<div class="empty">Needs FACEIT match stats (sign in).</div>`;
+  const duoTable = L.duos.length ? `<div class="table-wrap"><table class="heattable"><thead><tr><th>Teammate</th><th class="n">Games together</th><th class="n">Win % with / without</th><th class="n">Your rating with / without</th></tr></thead><tbody>
+    ${L.duos.map((x) => `<tr><td><b>${esc(x.nick)}</b> <span class="muted" style="font-size:11px">${pc(x.share)} of your matches</span></td><td class="n">${x.with.n}</td>
+      ${heat(x.with.winrate, x.without.winrate, x.with.n, (v) => `${pc(v)} <span class="muted" style="font-weight:400">/ ${pc(x.without.winrate)}</span>`, 10)}
+      ${heat(x.with.rating, x.without.rating, x.with.n, (v) => `${f2(v)} <span class="muted" style="font-weight:400">/ ${f2(x.without.rating)}</span>`, 0.1)}</tr>`).join("")}
+    </tbody></table></div>` : `<div class="empty">No teammate in 5 or more of your recent FACEIT matches.</div>`;
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <h2>What your sessions and lobbies say</h2>
+      <div class="sub">From ${L.withCtx} FACEIT matches with line-ups and timing (${L.sessionCount} sessions). Performance = FACEIT rating per match (1.00 ≈ average); small groups (under 5 games) are left out.</div>
+      <div class="grid g2" style="margin:8px 0 0">
+        <div><div class="prio-do" style="margin-bottom:6px">Strengths</div>${list(L.insights.strengths, true)}</div>
+        <div><div class="prio-do" style="margin-bottom:6px">Weaknesses &amp; what to do</div>${list(L.insights.weaknesses, false)}</div>
+      </div>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h2>Opponent strength</h2><div class="sub">Opponents' average FACEIT level vs your team's · they averaged level ${L.avgOppLevel == null ? "–" : L.avgOppLevel.toFixed(1)}</div>${table(L.strength, "Lobby")}</div>
+      <div class="card"><h2>Your place in the team</h2><div class="sub">From each match's scoreboard</div>${teamCard}</div>
+    </div>
+    <div class="grid g2">
+      <div class="card"><h2>Sessions</h2><div class="sub">By match number in a session (a break of 90+ minutes starts a new one)</div>${table(L.sessions, "Match in session")}
+        <div class="statlist" style="margin-top:10px"><div class="row"><span>Next match after a win / after a loss</span><b>${f2(L.tilt.afterWin.rating)} / ${f2(L.tilt.afterLoss.rating)} <span class="muted" style="font-weight:400">rating</span></b></div></div></div>
+      <div class="card"><h2>Time of day</h2><div class="sub">Your local time when the match started</div>${table(L.timeOfDay, "Time")}</div>
+    </div>
+    <div class="card" style="margin-bottom:16px"><h2>Duos</h2><div class="sub">Teammates in 5+ of your recent FACEIT matches – your results with them vs without them</div>${duoTable}</div>`;
 }
 
 const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",

@@ -4,3 +4,4 @@ data/snapshots/*.json
 __pycache__/
 *.pyc
 data/halves.json
+data/matchstats_v2.json

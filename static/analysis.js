@@ -449,6 +449,18 @@ const Analysis = (() => {
       mental.evidence.push({ label: bad.label, value: `${Math.round(bad.share * 100)}%`, ref: "over 30% means too many off-games" });
       mental.actions.push("Warm up for 10–15 minutes before your first match – deathmatch plus a few prefire runs.");
     }
+    const lob = lobbies(d); // sessions and tilt from FACEIT's match history
+    if (lob.fatigue) {
+      mental.sev += clampSev(Math.max(lob.fatigue.drop / 0.1, lob.fatigue.wrDrop / 15) * 0.6);
+      mental.evidence.push({ label: "FACEIT rating, matches 1–2 vs 4+ of a session", value: `${lob.fatigue.early.rating.toFixed(2)} vs ${lob.fatigue.late.rating.toFixed(2)}`, ref: "a drop of 0.10+ means fatigue" });
+      mental.actions.push("Stop after 3 matches, or take a real 20–30 minute break before a 4th.");
+    }
+    const tw = lob.tilt?.afterWin, tlz = lob.tilt?.afterLoss;
+    if (tw?.n >= 5 && tlz?.n >= 5 && tw.rating != null && tlz.rating != null && tw.rating - tlz.rating >= 0.1 && !(tl && tl.afterWin - tl.afterLoss >= 15)) {
+      mental.sev += clampSev((tw.rating - tlz.rating) / 0.1 * 0.5);
+      mental.evidence.push({ label: "FACEIT rating after a loss vs after a win", value: `${tlz.rating.toFixed(2)} vs ${tw.rating.toFixed(2)}`, ref: "a drop of 0.10+ suggests tilt" });
+      mental.actions.push("After a loss, take 10 minutes before re-queuing.");
+    }
     if (mental.evidence.length) areas.push({ id: "mental", title: "Consistency & tilt", maps: [], ...mental });
 
     // map pool: a clear worst map
@@ -715,6 +727,134 @@ const Analysis = (() => {
     return { available: maps.length > 0, reason: "Needs at least 3 matches on an Active Duty map.", maps, overall, coverage, missing };
   }
 
-  return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool, mapPlan,
+  /* --------------------------------------------------- lobbies & sessions --- */
+  // From FACEIT's match history (both teams' levels, teammates, timing) and the per-match team
+  // stats: results vs opponent strength, your place in your team, duo synergy, sessions/fatigue,
+  // time of day and tilt. Performance is measured with the FACEIT rating (HLTV 1.0) per match.
+  const LOBBY_MIN = 5;
+  const group = (ms) => {
+    const dd = ms.filter((m) => m.outcome === "win" || m.outcome === "loss");
+    const k = sum(ms.map((m) => m.kills)), dth = sum(ms.map((m) => m.deaths));
+    return { n: ms.length, winrate: dd.length ? (100 * dd.filter((m) => m.outcome === "win").length) / dd.length : null,
+      rating: mean(ms.map(faceitRating)), kd: ratio(k, dth) };
+  };
+
+  function lobbies(d) {
+    const fm = (d.matches || []).filter((m) => m.source === "faceit");
+    const withCtx = fm.filter((m) => m.ctx);
+    const out = { available: withCtx.length >= LOBBY_MIN, n: fm.length, withCtx: withCtx.length, insights: { strengths: [], weaknesses: [] } };
+    if (!out.available) {
+      out.reason = d.faceit?.available ? "Needs at least 5 FACEIT matches with history data." : "This uses FACEIT's match history – sign in (or add a FACEIT key) to see it.";
+      return out;
+    }
+    const S = out.insights.strengths, W = out.insights.weaknesses;
+    const add = (arr, weight, title, detail, action) => arr.push({ weight, title, detail, action: action || null });
+    const pc = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
+    const all = group(withCtx);
+    out.overall = all;
+
+    // 1. opponent strength: opponents' average level minus your team's
+    const diffOf = (m) => (m.ctx.oppLevel != null && m.ctx.teamLevel != null ? m.ctx.oppLevel - m.ctx.teamLevel : null);
+    const buckets = [["Weaker lobbies", (x) => x < -0.5], ["Even lobbies", (x) => x >= -0.5 && x <= 0.5], ["Stronger lobbies", (x) => x > 0.5]];
+    out.strength = buckets.map(([label, test]) => ({ label, ...group(withCtx.filter((m) => diffOf(m) != null && test(diffOf(m)))) }));
+    out.avgOppLevel = mean(withCtx.map((m) => m.ctx.oppLevel));
+    const [weak, , strong] = out.strength;
+    if (weak.n >= LOBBY_MIN && strong.n >= LOBBY_MIN && weak.winrate != null && strong.winrate != null) {
+      const gap = weak.winrate - strong.winrate;
+      if (strong.winrate >= 50) add(S, 1.2, "Beats stronger lobbies", `${pc(strong.winrate)} won against teams averaging more than half a level above yours (${strong.n} games).`);
+      else if (gap >= 25) add(W, gap / 25, "Struggles against stronger lobbies", `${pc(strong.winrate)} won against stronger teams vs ${pc(weak.winrate)} against weaker ones.`,
+        "Against stronger teams, play slower and more structured: trade, use utility, avoid hero peeks. Review a loss to a higher level and note how they punished you.");
+      if (weak.winrate < 55 && weak.n >= LOBBY_MIN) add(W, (60 - weak.winrate) / 15, "Drops games you should win", `Only ${pc(weak.winrate)} won against weaker lobbies (${weak.n} games).`,
+        "Against weaker teams, keep playing your defaults – these losses usually come from overconfidence and loose individual plays.");
+    }
+
+    // 2. your place in the team (per-match team stats)
+    const ranked = fm.filter((m) => m.halves?.rank != null);
+    if (ranked.length >= LOBBY_MIN) {
+      const top = ranked.filter((m) => m.halves.rank === 1);
+      const others = ranked.filter((m) => m.halves.rank !== 1);
+      out.team = { n: ranked.length, topFragRate: (100 * top.length) / ranked.length, avgRank: mean(ranked.map((m) => m.halves.rank)),
+        kshare: mean(ranked.map((m) => m.halves.kshare)), dshare: mean(ranked.map((m) => m.halves.dshare)),
+        winTop: group(top).winrate, winOther: group(others).winrate,
+        kshareWin: mean(ranked.filter((m) => m.outcome === "win").map((m) => m.halves.kshare)), kshareLoss: mean(ranked.filter((m) => m.outcome === "loss").map((m) => m.halves.kshare)) };
+      const t = out.team;
+      if (t.topFragRate >= 30) add(S, t.topFragRate / 30, "Your team's main fragger", `Top-fragged in ${pc(t.topFragRate)} of matches (20% would be average) – ${pc(100 * t.kshare)} of your team's kills.`);
+      else if (t.topFragRate <= 12) add(W, (15 - t.topFragRate) / 8, "Rarely the top fragger", `Top-fragged in only ${pc(t.topFragRate)} of matches; ${pc(100 * t.kshare)} of your team's kills.`,
+        "If you play support, that's fine – otherwise look at whether you're getting into enough duels with an advantage (utility, numbers, angles).");
+    }
+
+    // 3. duo synergy: who you play with, and how you do with them
+    const mates = {};
+    for (const m of withCtx) for (const t of m.ctx.teammates || []) (mates[t.id] ||= { id: t.id, nick: t.nick, ms: [] }).ms.push(m);
+    out.duos = Object.values(mates).filter((x) => x.ms.length >= LOBBY_MIN)
+      .map((x) => { const ids = new Set(x.ms.map((m) => m.id)); const w = group(x.ms), wo = group(withCtx.filter((m) => !ids.has(m.id)));
+        return { id: x.id, nick: x.nick, with: w, without: wo, share: (100 * x.ms.length) / withCtx.length }; })
+      .sort((a, b) => b.with.n - a.with.n).slice(0, 8);
+    for (const duo of out.duos) {
+      const dw = duo.with.winrate - (duo.without.winrate ?? duo.with.winrate), dr = (duo.with.rating ?? 0) - (duo.without.rating ?? 0);
+      // 10+ games together, and the rating has to show it too - win rates alone swing a lot in small samples
+      if (duo.with.n < 10 || duo.without.n < 10) continue;
+      if (dr >= 0.12 || (dw >= 25 && dr >= 0.04)) add(S, Math.max(dw / 15, dr / 0.12), `Good duo: ${duo.nick}`, `With ${duo.nick}: ${pc(duo.with.winrate)} won, rating ${f2(duo.with.rating)} – without: ${pc(duo.without.winrate)}, ${f2(duo.without.rating)} (${duo.with.n} games together).`);
+      else if (dr <= -0.12 || (dw <= -25 && dr <= -0.04)) add(W, Math.max(-dw / 15, -dr / 0.12), `Weaker with ${duo.nick}`, `With ${duo.nick}: ${pc(duo.with.winrate)} won, rating ${f2(duo.with.rating)} – without: ${pc(duo.without.winrate)}, ${f2(duo.without.rating)} (${duo.with.n} games together).`,
+        "Talk through roles before you queue together – two players wanting the same spot or role is a common cause.");
+    }
+
+    // 4. sessions: a new session starts after a 90-minute break
+    const chrono = withCtx.filter((m) => m.ctx.started).sort((a, b) => a.ctx.started.localeCompare(b.ctx.started));
+    let idx = 0, prevEnd = null;
+    const pos = new Map();
+    for (const m of chrono) {
+      const start = new Date(m.ctx.started).getTime();
+      idx = prevEnd != null && start - prevEnd <= 90 * 60e3 ? idx + 1 : 1;
+      pos.set(m, idx);
+      prevEnd = new Date(m.ctx.finished || m.ctx.started).getTime();
+    }
+    out.sessions = [["1st match", (i) => i === 1], ["2nd", (i) => i === 2], ["3rd", (i) => i === 3], ["4th or later", (i) => i >= 4]]
+      .map(([label, test]) => ({ label, ...group(chrono.filter((m) => test(pos.get(m)))) }));
+    out.sessionCount = chrono.filter((m) => pos.get(m) === 1).length;
+    const early = group(chrono.filter((m) => pos.get(m) <= 2)), late = group(chrono.filter((m) => pos.get(m) >= 4));
+    out.fatigue = null;
+    if (early.n >= LOBBY_MIN && late.n >= LOBBY_MIN && early.rating != null && late.rating != null) {
+      const drop = early.rating - late.rating, wrDrop = (early.winrate ?? 0) - (late.winrate ?? 0);
+      if (drop >= 0.1 || wrDrop >= 15) {
+        out.fatigue = { early, late, drop, wrDrop };
+        add(W, Math.max(drop / 0.1, wrDrop / 15), "Fades in long sessions", `Rating ${f2(early.rating)} and ${pc(early.winrate)} won in your first two matches of a session vs ${f2(late.rating)} and ${pc(late.winrate)} from the 4th match on.`,
+          "Stop after 3 matches, or take a real 20–30 minute break before a 4th.");
+      } else if (late.rating >= early.rating + 0.05) add(S, 0.5, "Warms up over a session", `Rating ${f2(late.rating)} from the 4th match on vs ${f2(early.rating)} in the first two.`);
+    }
+
+    // 5. time of day (your local time)
+    const slots = [["Morning (06–12)", (h) => h >= 6 && h < 12], ["Afternoon (12–18)", (h) => h >= 12 && h < 18], ["Evening (18–23)", (h) => h >= 18 && h < 23], ["Late night (23–06)", (h) => h >= 23 || h < 6]];
+    out.timeOfDay = slots.map(([label, test]) => ({ label, ...group(chrono.filter((m) => test(new Date(m.ctx.started).getHours()))) }));
+    const tod = out.timeOfDay.filter((x) => x.n >= 8 && x.rating != null);
+    if (tod.length >= 2) {
+      const best = tod.reduce((a, b) => (b.rating > a.rating ? b : a)), worst = tod.reduce((a, b) => (b.rating < a.rating ? b : a));
+      if (best.rating - worst.rating >= 0.12) {
+        add(S, (best.rating - worst.rating) / 0.15, `Best time to play: ${best.label.split(" (")[0].toLowerCase()}`, `Rating ${f2(best.rating)}, ${pc(best.winrate)} won (${best.n} games).`);
+        add(W, (best.rating - worst.rating) / 0.15, `Weakest time: ${worst.label.split(" (")[0].toLowerCase()}`, `Rating ${f2(worst.rating)}, ${pc(worst.winrate)} won (${worst.n} games) vs ${f2(best.rating)} at your best time.`,
+          `Avoid queuing ${worst.label.split(" (")[0].toLowerCase()} for games that matter.`);
+      }
+    }
+
+    // 6. tilt: the next match in the same session after a win vs after a loss
+    const afterWin = [], afterLoss = [];
+    for (let i = 1; i < chrono.length; i++) {
+      if (pos.get(chrono[i]) === 1) continue; // different session
+      (chrono[i - 1].outcome === "win" ? afterWin : chrono[i - 1].outcome === "loss" ? afterLoss : []).push(chrono[i]);
+    }
+    out.tilt = { afterWin: group(afterWin), afterLoss: group(afterLoss) };
+    const aw = out.tilt.afterWin, al = out.tilt.afterLoss;
+    if (aw.n >= LOBBY_MIN && al.n >= LOBBY_MIN && aw.rating != null && al.rating != null) {
+      if (aw.rating - al.rating >= 0.1) add(W, (aw.rating - al.rating) / 0.1, "Tilts after a loss", `Rating ${f2(al.rating)} in the match after a loss vs ${f2(aw.rating)} after a win (same session).`,
+        "After a loss, take 10 minutes before re-queuing – and don't queue again straight away after two losses.");
+      else if (al.rating >= aw.rating) add(S, 0.5, "Bounces back after losses", `Rating ${f2(al.rating)} after a loss vs ${f2(aw.rating)} after a win.`);
+    }
+
+    const byWeight = (a, b) => b.weight - a.weight;
+    S.sort(byWeight); W.sort(byWeight);
+    return out;
+  }
+
+  return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool, mapPlan, lobbies,
     getPool: () => [...ACTIVE_DUTY], DEFAULT_POOL, KNOWN_MAPS };
 })();
