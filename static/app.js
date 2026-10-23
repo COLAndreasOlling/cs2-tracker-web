@@ -584,7 +584,9 @@ function drawLobbies(d) {
       <div class="row"><span>Your kill share in wins / losses</span><b>${t.kshareWin == null ? "–" : pc(100 * t.kshareWin)} / ${t.kshareLoss == null ? "–" : pc(100 * t.kshareLoss)}</b></div>
     </div>` : `<div class="empty">Needs FACEIT match stats (sign in).</div>`;
   const duoTable = L.duos.length ? `<div class="table-wrap"><table class="heattable"><thead><tr><th>Teammate</th><th class="n">Games together</th><th class="n">Win % with / without</th><th class="n">Your rating with / without</th></tr></thead><tbody>
-    ${L.duos.map((x) => `<tr><td><b>${esc(x.nick)}</b> <span class="muted" style="font-size:11px">${pc(x.share)} of your matches</span></td><td class="n">${x.with.n}</td>
+    ${L.duos.map((x) => `<tr><td><a href="?q=${encodeURIComponent(x.nick)}&tab=summary" title="Open ${esc(x.nick)}'s report"><b>${esc(x.nick)}</b></a>
+      <a class="extlink" href="https://www.faceit.com/en/players/${encodeURIComponent(x.nick)}" target="_blank" rel="noopener" title="${esc(x.nick)} on FACEIT">FACEIT ↗</a>
+      <span class="muted" style="font-size:11px">${pc(x.share)} of your matches</span></td><td class="n">${x.with.n}</td>
       ${heat(x.with.winrate, x.without.winrate, x.with.n, (v) => `${pc(v)} <span class="muted" style="font-weight:400">/ ${pc(x.without.winrate)}</span>`, 10)}
       ${heat(x.with.rating, x.without.rating, x.with.n, (v) => `${f2(v)} <span class="muted" style="font-weight:400">/ ${f2(x.without.rating)}</span>`, 0.1)}</tr>`).join("")}
     </tbody></table></div>` : `<div class="empty">No teammate in 5 or more of your recent FACEIT matches.</div>`;

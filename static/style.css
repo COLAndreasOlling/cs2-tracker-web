@@ -173,6 +173,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .heattable tbody tr[data-map] { cursor: pointer; }
 .heattable tbody tr[data-map]:focus-visible { outline: 2px solid var(--series-1); outline-offset: -2px; }
 .heattable td.thin { color: var(--text-muted); font-style: italic; }
+.extlink { font-size: 11px; margin: 0 6px; }
 .nsub { display: inline-block; margin-left: 4px; font-size: 10px; font-weight: 400; color: var(--text-muted); }
 .heattable tr.sel td { box-shadow: inset 0 -2px 0 var(--accent); }
 .heattable tr.avg td { font-weight: 600; color: var(--text-secondary); border-top: 2px solid var(--border); }

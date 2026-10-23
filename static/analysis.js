@@ -499,6 +499,9 @@ const Analysis = (() => {
     rifler: { name: "Second rifle / trader", blurb: "Follows the entry and trades – a steady fragger who isn't first in." },
   };
 
+  const ENTRY_AVG = 0.2; // one opening duel per team per round, shared by 5 players
+  const ROLE_MIN = 55; // a role is only named when its score clearly stands out
+
   function weighted(parts) {
     const ok = parts.filter(([v]) => v != null);
     const w = ok.reduce((a, [, wt]) => a + wt, 0);
@@ -525,22 +528,23 @@ const Analysis = (() => {
     const known = (label, v, f) => (v == null || Number.isNaN(v) ? [] : [why(label, f(v))]);
     const scores = {
       awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.35), 0.85], [lin(sig.survival, 25, 45), 0.15]]),
-      entry: weighted([[lin(entryRate, 0.08, 0.22), 0.45], [lin(sig.tradedOpp, 0.12, 0.32), 0.3], [inv(lin(sig.survival, 20, 45)), 0.25]]),
+      // one opening duel per team per round => the average player's entry rate is ~0.20; score above that
+      entry: weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.55], [lin(sig.tradedOpp, 0.18, 0.32), 0.25], [inv(lin(sig.survival, 22, 40)), 0.2]]),
       support: weighted([[lin(sig.util, 0.9, 2.4), 0.35], [lin(sig.enemiesFlashed, 0.2, 0.9), 0.25], [lin(sig.apr, 0.08, 0.22), 0.2], [inv(lin(sig.kpr, 0.55, 0.95)), 0.2]]),
-      lurker: weighted([[inv(lin(sig.tradeOpp, 0.2, 0.5)), 0.4], [inv(lin(sig.tradedOpp, 0.1, 0.32)), 0.3], [lin(sig.survival, 25, 45), 0.3], [inv(lin(entryRate, 0.08, 0.22)), 0.3]]),
+      lurker: weighted([[inv(lin(sig.tradeOpp, 0.2, 0.5)), 0.4], [inv(lin(sig.tradedOpp, 0.1, 0.3)), 0.3], [lin(sig.survival, 25, 45), 0.3], [inv(lin(entryRate, ENTRY_AVG - 0.08, ENTRY_AVG + 0.02)), 0.35]]),
       rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(tradeSuccess, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2], [lin(sig.adr, 70, 95), 0.3]]),
     };
     const reasons = {
       awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles", pct(100 * sniperShare)), ...known("Rounds survived", sig.survival, pct)],
-      entry: [...known("Entry attempts per round (FACEIT)", entryRate, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
+      entry: [...known("Entry attempts per round (FACEIT; ~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
       support: [...known("Grenades per round", sig.util, f2), ...known("Enemies flashed per round", sig.enemiesFlashed, f2), ...known("Assists per round", sig.apr, f2), ...known("Kills per round", sig.kpr, f2)],
-      lurker: [...known("Trade chances per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct), ...known("Entry attempts per round (low = not first in)", entryRate, f2)],
+      lurker: [...known("Trade chances per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct), ...known("Entry attempts per round (low = not first in; ~0.20 is average)", entryRate, f2)],
       rifler: [...known("Trade chances per round", sig.tradeOpp, f2), ...known("Trade kill success", tradeSuccess, pct), ...known("Kills per round", sig.kpr, f2), ...known("ADR", sig.adr, (v) => v.toFixed(1))],
     };
     const ranked = Object.keys(scores).map((k) => ({ id: k, ...ROLE_INFO[k], score: scores[k], why: reasons[k] }))
       .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
     const [top, second] = ranked;
-    const flexible = top.score == null || top.score < 45;
+    const flexible = top.score == null || top.score < ROLE_MIN;
     const gap = top.score != null && second?.score != null ? top.score - second.score : null;
     const confidence = flexible ? "low" : gap >= 15 ? "clear" : "leaning";
 
@@ -559,7 +563,7 @@ const Analysis = (() => {
     return {
       available: true, basis, confidence, traits, ranked,
       primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
-      secondary: !flexible && second?.score != null && second.score >= 45 && gap < 20 ? second : null,
+      secondary: !flexible && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
     };
   }
 
