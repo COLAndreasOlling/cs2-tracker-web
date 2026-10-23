@@ -12,6 +12,10 @@ const dateLong = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateS
 
 let state = { data: null, progressTab: "elo", formMetric: "rating", page: 0, filters: { source: "", map: "", outcome: "" } };
 
+/* ---------------------------------------------------------- map pool --- */
+const POOL_KEY = "cs2tracker.mapPool";
+try { const p = JSON.parse(localStorage.getItem(POOL_KEY)); if (Array.isArray(p) && p.length) Analysis.setPool(p); } catch {}
+
 /* ------------------------------------------------------------- theme --- */
 try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
 $("#themeBtn").onclick = () => {
@@ -717,6 +721,8 @@ $("#settingsBtn").onclick = async () => {
   $("#keyInputs").hidden = !!cfg.locked; $("#saveKeys").hidden = !!cfg.locked;
   $("#faceitKeyType").textContent = browser ? "new key (Server side works – it stays in this browser)" : "Server side";
   $("#historyTools").hidden = !browser;
+  const pool = Analysis.getPool();
+  $("#poolMaps").innerHTML = Analysis.KNOWN_MAPS.map((m) => `<label class="poolmap"><input type="checkbox" value="${esc(m)}" ${pool.includes(m) ? "checked" : ""}> ${esc(m)}</label>`).join("");
   $("#lockTools").hidden = !browser;
   $("#lockOut").hidden = true; $("#lockKeyInput").value = $("#lockPw1").value = $("#lockPw2").value = "";
   $("#settings").showModal();
@@ -758,6 +764,18 @@ $("#copyLock").onclick = async () => {
   try { await navigator.clipboard.writeText($("#lockResult").value); $("#copyLock").textContent = "Copied"; }
   catch { $("#lockResult").select(); $("#copyLock").textContent = "Press Ctrl+C"; }
   setTimeout(() => ($("#copyLock").textContent = "Copy"), 2000);
+};
+$("#poolReset").onclick = () => {
+  const def = Analysis.DEFAULT_POOL;
+  $("#poolMaps").querySelectorAll("input").forEach((i) => (i.checked = def.includes(i.value)));
+};
+$("#poolSave").onclick = () => {
+  const picked = [...$("#poolMaps").querySelectorAll("input:checked")].map((i) => i.value);
+  if (!picked.length) return alert("Pick at least one map.");
+  Analysis.setPool(picked);
+  try { localStorage.setItem(POOL_KEY, JSON.stringify(picked)); } catch {}
+  $("#poolSave").textContent = "Saved"; setTimeout(() => ($("#poolSave").textContent = "Save map pool"), 1500);
+  if (state.data && !$("#report").hidden) render(state.data);
 };
 $("#exportHistory").onclick = (e) => {
   e.preventDefault();

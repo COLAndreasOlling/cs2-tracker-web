@@ -250,12 +250,18 @@ const Analysis = (() => {
   const MIN_MATCHES = 5;
   const hasDetail = (m) => !!(m.ext || fxOf(m));
 
-  // Active Duty pool (Premier / FACEIT / pro play) - tips are only given for these maps, compared
-  // with each other. Last changed 22 Jan 2026 (Anubis in, Train out). Update when Valve rotates maps.
-  const ACTIVE_DUTY = ["Ancient", "Anubis", "Dust2", "Inferno", "Mirage", "Nuke", "Overpass"];
+  // Active Duty pool (Premier / FACEIT) - tips are only given for these maps, compared with each other.
+  // Default as of 6 Jul 2026, when Cache replaced Overpass in both Valve's pool and FACEIT's.
+  // Viewers can override it in Settings (Analysis.setPool), so a rotation doesn't need a code change.
+  const DEFAULT_POOL = ["Ancient", "Anubis", "Cache", "Dust2", "Inferno", "Mirage", "Nuke"];
+  const KNOWN_MAPS = ["Ancient", "Anubis", "Cache", "Dust2", "Inferno", "Mirage", "Nuke", "Overpass", "Train", "Vertigo"];
   const norm = (name) => String(name).toLowerCase().replace(/[^a-z0-9]/g, "").replace(/ii$/, "2");
-  const ACTIVE_SET = new Set(ACTIVE_DUTY.map(norm));
+  let ACTIVE_DUTY = DEFAULT_POOL, ACTIVE_SET = new Set(DEFAULT_POOL.map(norm));
   const isActiveDuty = (name) => ACTIVE_SET.has(norm(name));
+  function setPool(maps) {
+    ACTIVE_DUTY = Array.isArray(maps) && maps.length ? [...maps] : DEFAULT_POOL;
+    ACTIVE_SET = new Set(ACTIVE_DUTY.map(norm));
+  }
 
   function mapCoaching(d) {
     const byMap = {}, outOfPool = new Set();
@@ -544,5 +550,6 @@ const Analysis = (() => {
     };
   }
 
-  return { integrity, mapCoaching, coachingPlan, role, faceitRating };
+  return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool,
+    getPool: () => [...ACTIVE_DUTY], DEFAULT_POOL, KNOWN_MAPS };
 })();

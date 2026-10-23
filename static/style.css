@@ -167,6 +167,11 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .ins-list .ref { display: block; font-size: 11px; color: var(--text-muted); }
 .ins-list .val { font-weight: 700; white-space: nowrap; }
 
+/* map pool picker */
+.poolmaps { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 8px; }
+dialog label.poolmap { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 400; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+dialog label.poolmap input { width: auto; margin: 0; }
+
 /* role */
 .role-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
 .role-badge { padding: 3px 10px; border-radius: 999px; background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; }
