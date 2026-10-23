@@ -494,6 +494,7 @@ const Analysis = (() => {
   const ROLE_INFO = {
     awper: { name: "AWPer", blurb: "Takes a large share of the team's kills with the AWP and holds long angles." },
     entry: { name: "Entry fragger", blurb: "First into the site – takes opening duels and dies where teammates can trade." },
+    anchor: { name: "Anchor / solo first contact", blurb: "Takes many first duels, but without a teammate close enough to trade – typical for a CT site anchor or an aggressive solo player." },
     support: { name: "Support", blurb: "Utility-heavy: flashes and smokes for teammates, assists more than average." },
     lurker: { name: "Lurker", blurb: "Plays away from the team, catches rotations, and survives rounds alone." },
     rifler: { name: "Second rifle / trader", blurb: "Follows the entry and trades – a steady fragger who isn't first in." },
@@ -527,17 +528,28 @@ const Analysis = (() => {
     const why = (label, value) => ({ label, value });
     const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
     const known = (label, v, f) => (v == null || Number.isNaN(v) ? [] : [why(label, f(v))]);
+    const hasTrade = sig.tradedOpp != null;
     const scores = {
       awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.3), 0.9], [lin(sig.survival, 25, 45), 0.1]]),
       // one opening duel per team per round => the average player's entry rate is ~0.20; score above that
-      entry: weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.55], [lin(sig.tradedOpp, 0.18, 0.32), 0.25], [inv(lin(sig.survival, 22, 40)), 0.2]]),
+      // FACEIT's "entries" are the round's first duels on BOTH sides, so a CT anchor collects them too. With
+      // Leetify trade data the two separate: an entry dies where teammates can trade, an anchor mostly alone.
+      entry: hasTrade
+        ? weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.45], [lin(sig.tradedOpp, 0.2, 0.32), 0.4], [inv(lin(sig.survival, 22, 40)), 0.15]])
+        : weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.75], [inv(lin(sig.survival, 22, 40)), 0.25]]),
+      anchor: hasTrade && entryRate != null
+        ? weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.45], [inv(lin(sig.tradedOpp, 0.1, 0.22)), 0.4], [lin(sig.survival, 22, 40), 0.15]])
+        : null,
       support: weighted([[lin(sig.util, 0.9, 2.4), 0.35], [lin(sig.enemiesFlashed, 0.2, 0.9), 0.25], [lin(sig.apr, 0.08, 0.22), 0.2], [inv(lin(sig.kpr, 0.55, 0.95)), 0.2]]),
       lurker: weighted([[inv(lin(sig.tradeOpp, 0.2, 0.5)), 0.4], [inv(lin(sig.tradedOpp, 0.1, 0.3)), 0.3], [lin(sig.survival, 25, 45), 0.3], [inv(lin(entryRate, ENTRY_AVG - 0.08, ENTRY_AVG + 0.02)), 0.35]]),
       rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(tradeSuccess, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2], [lin(sig.adr, 70, 95), 0.3]]),
     };
     const reasons = {
       awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles", pct(100 * sniperShare)), ...known("Rounds survived", sig.survival, pct)],
-      entry: [...known("Entry attempts per round (FACEIT; ~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
+      entry: [...known("First duels per round, CT and T (FACEIT; ~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (high = team right behind)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
+      anchor: hasTrade && entryRate != null
+        ? [...known("First duels per round, CT and T (~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (low = fights alone)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)]
+        : [why("Needs Leetify trade data", "to tell an anchor from an entry fragger")],
       support: [...known("Grenades per round", sig.util, f2), ...known("Enemies flashed per round", sig.enemiesFlashed, f2), ...known("Assists per round", sig.apr, f2), ...known("Kills per round", sig.kpr, f2)],
       lurker: [...known("Trade chances per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct), ...known("Entry attempts per round (low = not first in; ~0.20 is average)", entryRate, f2)],
       rifler: [...known("Trade chances per round", sig.tradeOpp, f2), ...known("Trade kill success", tradeSuccess, pct), ...known("Kills per round", sig.kpr, f2), ...known("ADR", sig.adr, (v) => v.toFixed(1))],
@@ -545,7 +557,10 @@ const Analysis = (() => {
     // AWP usage decides: AWP picks count as FACEIT "entries", so a star AWPer also has a high entry score.
     // When a large share of kills come from sniper rifles, the AWP role wins and aggression becomes a trait.
     const isAwper = sniperShare != null && sniperShare >= AWP_SHARE;
-    const ranked = Object.keys(scores).map((k) => ({ id: k, ...ROLE_INFO[k], score: scores[k], why: reasons[k] }))
+    // without trade data, "entry" just means "takes many first duels" - on CT that's often the site anchor
+    const info = (k) => (k === "entry" && !hasTrade ? { name: "First-contact player",
+      blurb: "Takes many of the round's first duels – on T that's entrying, on CT it's often the site anchor. Without Leetify trade data the two can't be told apart." } : ROLE_INFO[k]);
+    const ranked = Object.keys(scores).map((k) => ({ id: k, ...info(k), score: scores[k], why: reasons[k] }))
       .sort((a, b) => (isAwper ? (b.id === "awper") - (a.id === "awper") : 0) || (b.score ?? -1) - (a.score ?? -1));
     const [top, second] = ranked;
     const flexible = !isAwper && (top.score == null || top.score < ROLE_MIN);
@@ -562,7 +577,8 @@ const Analysis = (() => {
     if (sig.kpr >= 0.85) traits.push("High fragger");
     if (lr.ct != null && lr.t != null && Math.abs(lr.ct - lr.t) >= 2.5) traits.push(lr.ct > lr.t ? "Stronger on CT" : "Stronger on T");
     if (sniperShare == null) traits.push("AWP use unknown (no FACEIT sniper data)");
-    if (isAwper && scores.entry != null && scores.entry >= ROLE_MIN) traits.push("Aggressive AWP – takes opening picks");
+    const firstContact = Math.max(scores.entry ?? 0, scores.anchor ?? 0); // first duels, traded or alone
+    if (isAwper && firstContact >= ROLE_MIN) traits.push("Aggressive AWP – takes opening picks");
     if (isAwper && scores.lurker != null && scores.lurker >= ROLE_MIN) traits.push("Passive AWP – holds angles away from the team");
     if (!isAwper && sniperShare != null && sniperShare >= 0.12) traits.push("Part-time AWPer");
     if (!d.leetify?.available) traits.push("No Leetify data – trade signals unavailable");
