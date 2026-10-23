@@ -252,7 +252,57 @@ def fetch_faceit(ident, cfg):
         raw["bans"] = faceit_get(f"/players/{pid}/bans", key, limit=20).get("items", [])
     except ApiError:
         raw["bans"] = None  # unknown, not "no bans"
+    raw["halves"] = fetch_halves(raw["matches"], pid, key)
     return raw
+
+
+HALVES_PATH = os.path.join(DATA, "halves.json")  # per-match half scores; a finished match never changes
+_halves_lock = threading.Lock()
+
+
+def halves_from_match_stats(ms, pid):
+    """The player's team's half scores for one match, from FACEIT's match stats."""
+    rounds = (ms or {}).get("rounds") or []
+    teams = (rounds[0] if rounds else {}).get("teams") or []
+    mine = next((t for t in teams if any(p.get("player_id") == pid for p in t.get("players") or [])), None)
+    other = next((t for t in teams if t is not mine), None)
+    if not mine or not other:
+        return None
+    t = lambda x, k: num(pick(x.get("team_stats") or {}, k))
+    return {"fh": t(mine, "First Half Score"), "sh": t(mine, "Second Half Score"), "ot": t(mine, "Overtime score") or 0,
+            "final": t(mine, "Final Score"), "ofh": t(other, "First Half Score"), "osh": t(other, "Second Half Score"),
+            "oot": t(other, "Overtime score") or 0, "ofinal": t(other, "Final Score")}
+
+
+def fetch_halves(items, pid, key):
+    """Half scores for the player's recent FACEIT matches: one call per match, cached on disk."""
+    from concurrent.futures import ThreadPoolExecutor
+    with _halves_lock:
+        try:
+            with open(HALVES_PATH, encoding="utf-8") as f:
+                cache = json.load(f)
+        except (OSError, ValueError):
+            cache = {}
+    ids = [i for i in (pick(it.get("stats", it), "Match Id") for it in items) if i][:60]
+    todo = [i for i in ids if f"{i}|{pid}" not in cache]
+
+    def one(mid):
+        try:
+            return mid, halves_from_match_stats(faceit_get(f"/matches/{mid}/stats", key), pid)
+        except ApiError:
+            return mid, None  # left uncached; retried next lookup
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        for mid, h in ex.map(one, todo):
+            if h is not None:
+                cache[f"{mid}|{pid}"] = h
+    with _halves_lock:
+        try:
+            with open(HALVES_PATH, "w", encoding="utf-8") as f:
+                json.dump(cache, f)
+        except OSError:
+            pass
+    return {i: cache[f"{i}|{pid}"] for i in ids if cache.get(f"{i}|{pid}")}
 
 
 # FACEIT's extended CS2 match stats, when present (names as FACEIT reports them; absent keys stay None).
@@ -320,6 +370,7 @@ def normalize_faceit(raw):
             "mk3plus": sum(num(pick(st, k), 0) for k in ("Triple Kills", "Quadro Kills", "Penta Kills")),
             "multi": faceit_multi(st),
             "fx": faceit_extended(st),
+            "halves": (raw.get("halves") or {}).get(pick(st, "Match Id")),
         })
     matches.sort(key=lambda m: m["date"] or "", reverse=True)
     recent = life.get("Recent Results") or []
@@ -449,6 +500,7 @@ def normalize_leetify(raw, steam64):
             "rank_type": rm.get("rank_type"),
             "has_banned_player": m.get("has_banned_player"),
             "ext": match_ext(me),
+            "start_side": {3: "CT", 2: "T"}.get(me.get("initial_team_number")),  # CS team 2 = T, 3 = CT
         })
     matches.sort(key=lambda m: m["date"] or "", reverse=True)
     r, st, rk = p.get("rating") or {}, p.get("stats") or {}, p.get("ranks") or {}
@@ -497,6 +549,8 @@ def merge_matches(fc, lt):
                 m["adr"] = f["adr"]
             if f:  # FACEIT's own numbers for this match, used for the FACEIT rating
                 m["faceit_stats"] = {k: f[k] for k in ("kills", "deaths", "rounds", "multi", "fx")}
+                if f.get("halves"):
+                    m["halves"] = f["halves"]
         out += [m for m in fc["matches"] if m["id"] not in seen]
     out.sort(key=lambda m: m["date"] or "", reverse=True)
     return out
@@ -859,6 +913,19 @@ DEMO_UTIL = {"de_anubis": 0.5, "de_nuke": 0.9}  # demo player's utility is weak 
 DEMO_T_SIDE = {"de_nuke": -0.035}  # ...and their T side is weak on Nuke
 
 
+# Demo team tendencies by map: positive = T-sided (more rounds on the T half), negative = CT-sided.
+DEMO_SIDE = {"de_ancient": 2.2, "de_nuke": -2.4, "de_mirage": 0.6}
+
+
+def split_halves(rnd, mp, my, op, start_ct):
+    """Split a demo final score into halves that respect MR12 and the map's side bias."""
+    bias = DEMO_SIDE.get(mp, 0)
+    target = round(6 + (-bias if start_ct else bias) + rnd.gauss(0, 1.6))
+    lo, hi = max(0, my - 12, 12 - op), min(12, my, 24 - op)  # each half has at most 12 rounds
+    fh = max(lo, min(hi, target))
+    return {"fh": fh, "sh": my - fh, "ot": 0, "final": my, "ofh": 12 - fh, "osh": op - (12 - fh), "oot": 0, "ofinal": op}
+
+
 def demo_multi(rnd, kills):
     """Rounds with 1..5 kills that add up to the match's kills."""
     m = [0, rnd.randint(1, 4), rnd.randint(0, 2), int(rnd.random() < 0.12), int(rnd.random() < 0.02)]
@@ -925,7 +992,7 @@ def demo_raw():
     maps = ["de_mirage", "de_inferno", "de_ancient", "de_nuke", "de_anubis", "de_dust2", "de_cache"]
     skill = {"de_mirage": 0.15, "de_inferno": 0.08, "de_ancient": 0.0, "de_nuke": -0.12, "de_anubis": 0.05, "de_dust2": 0.1, "de_cache": -0.05}
     now = datetime.now(timezone.utc)
-    l_matches, l_recent, f_items = [], [], []
+    l_matches, l_recent, f_items, demo_halves = [], [], [], {}
     premier, elo = 16480, 1785
     for i in range(100):
         when = now - timedelta(hours=i * 19 + rnd.randint(0, 6))
@@ -943,11 +1010,14 @@ def demo_raw():
         mid = f"demo-{i:03d}"
         fid = f"1-demo-{i:03d}" if src == "faceit" else None
         mk = demo_multi(rnd, kills)
+        start_ct = rnd.random() < 0.5
+        if fid:
+            demo_halves[fid] = split_halves(rnd, mp, my, op, start_ct)
         l_matches.append({
             "id": mid, "finished_at": when.isoformat().replace("+00:00", "Z"), "data_source": src,
             "data_source_match_id": fid, "map_name": mp, "has_banned_player": False,
-            "team_scores": [{"team_number": 2, "score": my}, {"team_number": 3, "score": op}],
-            "stats": [{"steam64_id": DEMO_STEAM64, "name": "demo_player", "initial_team_number": 2,
+            "team_scores": [{"team_number": 3 if start_ct else 2, "score": my}, {"team_number": 2 if start_ct else 3, "score": op}],
+            "stats": [{"steam64_id": DEMO_STEAM64, "name": "demo_player", "initial_team_number": 3 if start_ct else 2,
                        "total_kills": kills, "total_deaths": deaths, "total_assists": rnd.randint(1, 7),
                        "total_hs_kills": hs, "dpr": round(kills / rounds * 112 + rnd.gauss(0, 6), 1),
                        "rounds_count": my + op, "leetify_rating": rating,
@@ -986,7 +1056,7 @@ def demo_raw():
                   "t_opening_duel_success_percentage": 44.1, "traded_deaths_success_percentage": 39.2,
                   "trade_kill_opportunities_per_round": 0.31, "trade_kills_success_percentage": 58.3, "utility_on_death_avg": 342.1},
         "recent_matches": l_recent, "recent_teammates": []}}
-    faceit = {"available": True, "errors": [], "matches": f_items, "bans": [],
+    faceit = {"available": True, "errors": [], "matches": f_items, "bans": [], "halves": demo_halves,
               "player": {"player_id": "demo", "nickname": "demo_player", "avatar": "", "country": "dk",
                          "faceit_url": "https://www.faceit.com/{lang}/players/demo_player",
                          "games": {"cs2": {"faceit_elo": 1785, "skill_level": 8, "game_player_id": DEMO_STEAM64, "region": "EU"}}},

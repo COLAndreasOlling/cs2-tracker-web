@@ -14,6 +14,7 @@ const Engine = (() => {
   const CACHE_TTL = 120000;
   const CFG_KEY = "cs2tracker.config";
   const SNAP_KEY = "cs2tracker.snapshots";
+  const HALVES_KEY = "cs2tracker.halves"; // per-match half scores; a finished match never changes
   const cache = new Map();
 
   class ApiError extends Error {
@@ -180,7 +181,41 @@ const Engine = (() => {
     } catch (e) { raw.errors.push(`match stats: ${e.message}`); }
     try { raw.bans = (await faceitGet(`/players/${pid}/bans`, key, { limit: 20 })).items || []; }
     catch { raw.bans = null; } // unknown, not "no bans"
+    raw.halves = await fetchHalves(raw.matches, pid, key);
     return raw;
+  }
+
+  /** The player's team's half scores for one match, from FACEIT's match stats. */
+  function halvesFromMatchStats(ms, pid) {
+    const round = (ms?.rounds || [])[0];
+    const teams = round?.teams || [];
+    const mine = teams.find((t) => (t.players || []).some((p) => p.player_id === pid));
+    const other = teams.find((t) => t !== mine);
+    if (!mine || !other) return null;
+    const t = (x, k) => num(pick(x.team_stats || {}, k));
+    return { fh: t(mine, "First Half Score"), sh: t(mine, "Second Half Score"), ot: t(mine, "Overtime score") ?? 0, final: t(mine, "Final Score"),
+      ofh: t(other, "First Half Score"), osh: t(other, "Second Half Score"), oot: t(other, "Overtime score") ?? 0, ofinal: t(other, "Final Score") };
+  }
+
+  /** Half scores for the player's recent FACEIT matches: one call per match, cached for good. */
+  async function fetchHalves(items, pid, key) {
+    const cache = readJSON(HALVES_KEY, {}), out = {};
+    const ids = items.map((it) => pick(it.stats || it, "Match Id")).filter(Boolean).slice(0, 60);
+    const todo = ids.filter((id) => !(`${id}|${pid}` in cache));
+    let i = 0;
+    const worker = async () => {
+      while (i < todo.length) {
+        const id = todo[i++];
+        try { cache[`${id}|${pid}`] = halvesFromMatchStats(await faceitGet(`/matches/${id}/stats`, key), pid); }
+        catch { /* leave uncached; retried next lookup */ }
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    for (const id of ids) if (cache[`${id}|${pid}`]) out[id] = cache[`${id}|${pid}`];
+    const keys = Object.keys(cache); // keep the cache bounded
+    if (keys.length > 3000) for (const k of keys.slice(0, keys.length - 3000)) delete cache[k];
+    try { localStorage.setItem(HALVES_KEY, JSON.stringify(cache)); } catch {}
+    return out;
   }
 
   // FACEIT's extended CS2 match stats, when present (names as FACEIT reports them; absent keys stay null).
@@ -226,6 +261,7 @@ const Engine = (() => {
         mk3plus: ["Triple Kills", "Quadro Kills", "Penta Kills"].reduce((a, k) => a + num(pick(st, k), 0), 0),
         multi: faceitMulti(st),
         fx: Object.fromEntries(Object.entries(FACEIT_FX).map(([k, v]) => [k, num(pick(st, v))])),
+        halves: raw.halves?.[pick(st, "Match Id")] || null,
       };
     }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return {
@@ -314,6 +350,7 @@ const Engine = (() => {
         multi: [1, 2, 3, 4, 5].map((i) => me[`multi${i}k`] || 0),
         rank: rm.rank ?? null, rank_type: rm.rank_type ?? null, has_banned_player: m.has_banned_player,
         ext: matchExt(me),
+        start_side: me.initial_team_number === 3 ? "CT" : me.initial_team_number === 2 ? "T" : null, // CS team 2 = T, 3 = CT
       });
     }
     matches.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
@@ -346,6 +383,7 @@ const Engine = (() => {
         const f = fmap[m.faceit_id];
         if (f && m.adr == null) m.adr = f.adr;
         if (f) m.faceit_stats = { kills: f.kills, deaths: f.deaths, rounds: f.rounds, multi: f.multi, fx: f.fx }; // FACEIT rating & role
+        if (f?.halves) m.halves = f.halves;
       }
       out.push(...fc.matches.filter((m) => !seen.has(m.id)));
     }
@@ -528,6 +566,18 @@ const Engine = (() => {
   const DEMO_UTIL = { de_anubis: 0.5, de_nuke: 0.9 }; // demo player's utility is weak on Anubis
   const DEMO_T_SIDE = { de_nuke: -0.035 }; // ...and their T side is weak on Nuke
 
+  // Demo team tendencies by map: positive = T-sided (more rounds on the T half), negative = CT-sided.
+  const DEMO_SIDE = { de_ancient: 2.2, de_nuke: -2.4, de_mirage: 0.6 };
+
+  /** Split a demo final score into halves that respect MR12 and the map's side bias. */
+  function splitHalves(rnd, mp, my, op, startCT) {
+    const bias = DEMO_SIDE[mp] || 0;
+    const target = Math.round(6 + (startCT ? -bias : bias) + rnd.gauss(0, 1.6));
+    const lo = Math.max(0, my - 12, 12 - op), hi = Math.min(12, my, 24 - op); // each half has at most 12 rounds
+    const fh = Math.max(lo, Math.min(hi, target));
+    return { fh, sh: my - fh, ot: 0, final: my, ofh: 12 - fh, osh: op - (12 - fh), oot: 0, ofinal: op };
+  }
+
   /** Rounds with 1..5 kills that add up to the match's kills. */
   function demoMulti(rnd, kills) {
     const m = [0, rnd.int(1, 4), rnd.int(0, 2), +(rnd.random() < 0.12), +(rnd.random() < 0.02)];
@@ -591,7 +641,7 @@ const Engine = (() => {
     const maps = ["de_mirage", "de_inferno", "de_ancient", "de_nuke", "de_anubis", "de_dust2", "de_cache"];
     const skill = { de_mirage: 0.15, de_inferno: 0.08, de_ancient: 0.0, de_nuke: -0.12, de_anubis: 0.05, de_dust2: 0.1, de_cache: -0.05 };
     const now = Date.now(), premier = 16480, elo = 1785;
-    const lMatches = [], lRecent = [], fItems = [];
+    const lMatches = [], lRecent = [], fItems = [], demoHalves = {};
     for (let i = 0; i < 100; i++) {
       const when = new Date(now - (i * 19 + rnd.int(0, 6)) * 3600e3);
       const mp = rnd.choice(maps), trend = ((100 - i) / 100) * 0.12; // gets better over time
@@ -605,12 +655,14 @@ const Engine = (() => {
       const src = rnd.weighted(["faceit", "matchmaking", "matchmaking_competitive"], [0.55, 0.35, 0.1]);
       const rating = form * 0.04, mid = `demo-${String(i).padStart(3, "0")}`, fid = src === "faceit" ? `1-${mid}` : null;
       const mk = demoMulti(rnd, kills);
+      const startCT = rnd.random() < 0.5;
       const finished = when.toISOString();
+      if (fid) demoHalves[fid] = splitHalves(rnd, mp, my, op, startCT);
       lMatches.push({
         id: mid, finished_at: finished, data_source: src, data_source_match_id: fid, map_name: mp, has_banned_player: false,
-        team_scores: [{ team_number: 2, score: my }, { team_number: 3, score: op }],
+        team_scores: [{ team_number: startCT ? 3 : 2, score: my }, { team_number: startCT ? 2 : 3, score: op }],
         stats: [{
-          steam64_id: DEMO_STEAM64, name: "demo_player", initial_team_number: 2, total_kills: kills, total_deaths: deaths,
+          steam64_id: DEMO_STEAM64, name: "demo_player", initial_team_number: startCT ? 3 : 2, total_kills: kills, total_deaths: deaths,
           total_assists: rnd.int(1, 7), total_hs_kills: hs, dpr: roundOr((kills / rounds) * 112 + rnd.gauss(0, 6), 1),
           rounds_count: my + op, leetify_rating: rating, ct_leetify_rating: rating + rnd.gauss(0, 0.02),
           t_leetify_rating: rating + (DEMO_T_SIDE[mp] || 0) + rnd.gauss(0, 0.02),
@@ -645,7 +697,7 @@ const Engine = (() => {
         traded_deaths_success_percentage: 39.2, trade_kill_opportunities_per_round: 0.31, trade_kills_success_percentage: 58.3,
         utility_on_death_avg: 342.1 },
       recent_matches: lRecent, recent_teammates: [] } };
-    const faceit = { available: true, errors: [], matches: fItems, bans: [],
+    const faceit = { available: true, errors: [], matches: fItems, bans: [], halves: demoHalves,
       player: { player_id: "demo", nickname: "demo_player", avatar: "", country: "dk", faceit_url: "https://www.faceit.com/{lang}/players/demo_player",
         games: { cs2: { faceit_elo: elo, skill_level: 8, game_player_id: DEMO_STEAM64, region: "EU" } } },
       stats: { lifetime: { Matches: "642", Wins: "347", "Win Rate %": "54", "Average K/D Ratio": "1.12", "Average Headshots %": "48",

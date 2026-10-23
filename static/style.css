@@ -167,6 +167,20 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .ins-list .ref { display: block; font-size: 11px; color: var(--text-muted); }
 .ins-list .val { font-weight: 700; white-space: nowrap; }
 
+/* map plan */
+.card.flat { box-shadow: none; background: var(--surface-2); }
+.heattable td.heat { font-weight: 600; }
+.heattable tr.sel td { box-shadow: inset 0 -2px 0 var(--accent); }
+.heattable tr.avg td { font-weight: 600; color: var(--text-secondary); border-top: 2px solid var(--border); }
+.side-row { display: grid; grid-template-columns: 30px 1fr 64px; gap: 10px; align-items: center; margin: 10px 0; }
+.side-row .track { position: relative; height: 12px; background: var(--surface-1); border-radius: 4px; overflow: hidden; }
+.side-row .fill { position: absolute; inset: 0 auto 0 0; border-radius: 0 4px 4px 0; }
+.side-row .fill.ct { background: var(--series-1); }
+.side-row .fill.t { background: var(--series-2); }
+.side-row .mid { position: absolute; top: -2px; bottom: -2px; left: 50%; width: 2px; background: var(--text-muted); opacity: .6; }
+.side-row .val { text-align: right; font-weight: 700; }
+.side-lbl { font-weight: 700; }
+
 /* map pool picker */
 .poolmaps { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 8px; }
 dialog label.poolmap { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 400; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }

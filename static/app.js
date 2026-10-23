@@ -256,6 +256,7 @@ function render(d) {
   <nav class="pagebar" id="pagebar" aria-label="Report sections">
     <div class="tabs pagetabs" role="tablist">
       <button role="tab" data-page="summary">Summary</button>
+      <button role="tab" data-page="mapplan">Map plan</button>
       <button role="tab" data-page="integrity">Integrity check${integDot ? `<span class="tabdot" style="background:${css(integDot)}" aria-hidden="true"></span>` : ""}</button>
       <button role="tab" data-page="coaching">Coaching${tipCount ? `<span class="tabcount">${tipCount}</span>` : ""}</button>
     </div>
@@ -339,6 +340,11 @@ function render(d) {
   <p class="muted" style="font-size:12px;margin-top:20px">Data: FACEIT Data API v4 and Leetify Public CS API. Leetify covers Premier, competitive, FACEIT and other sources that it has parsed; FACEIT-only matches Leetify hasn't parsed are added from FACEIT. Ratings and reference thresholds are indicative, not official.</p>
   </section>
 
+  <section class="page" data-page="mapplan" hidden>
+    <div class="section-title">Map plan · sides, halves &amp; comebacks</div>
+    <div class="card" id="planCard" style="margin-bottom:16px"></div>
+  </section>
+
   <section class="page" data-page="integrity" hidden>
     <div class="section-title">Integrity check</div>
     ${integritySection(integ, d)}
@@ -363,7 +369,7 @@ function render(d) {
 }
 
 /* -------------------------------------------------------------- pages --- */
-const PAGES = ["summary", "integrity", "coaching"];
+const PAGES = ["summary", "mapplan", "integrity", "coaching"];
 
 function setupPages(d) {
   const bar = $("#pagebar");
@@ -372,6 +378,7 @@ function setupPages(d) {
     document.querySelectorAll("#report .page").forEach((p) => (p.hidden = p.dataset.page !== page));
     bar.querySelectorAll("[data-page]").forEach((b) => { const on = b.dataset.page === page; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
     if (page === "summary") { drawProgress(d); drawPremier(d); drawForm(d); } // charts need a visible width
+    if (page === "mapplan") drawMapPlan(d);
     const u = new URL(location.href); u.searchParams.set("tab", page); history.replaceState(null, "", u);
     // when the bar is already stuck, start the new page at its top instead of mid-page
     if (fromClick && bar.classList.contains("stuck"))
@@ -484,6 +491,78 @@ function planSection(plan) {
       ${plan.keep.length ? `<ul class="ins-list">${plan.keep.map((k) => `<li><span class="ic" style="background:${css("--good")}" aria-label="strength">+</span><span>${esc(k.label)}</span><span class="val">${esc(k.value)}</span></li>`).join("")}</ul>` : `<div class="empty" style="padding:12px 0">No stats clearly above the reference values yet.</div>`}</div>
   </div>
   <p class="muted" style="font-size:12px;margin:-4px 0 16px">Priorities are ranked by how far a stat is from a rough rule-of-thumb reference (not an official benchmark), and rise when the same problem appears on several maps.</p>`;
+}
+
+/* ----------------------------------------------------------- map plan --- */
+try { state.planWho = localStorage.getItem("cs2tracker.planWho") || "me"; } catch { state.planWho = "me"; }
+const PLAN_HINT = 8;
+
+function drawMapPlan(d) {
+  const el = $("#planCard");
+  const plan = Analysis.mapPlan(d, state.planWho);
+  const me = state.planWho === "me";
+  const toggle = `<div class="tabs" id="planWho" role="group" aria-label="Perspective">
+      <button data-who="me" class="${me ? "on" : ""}">My plan</button><button data-who="opp" class="${me ? "" : "on"}">Anti-strat this player</button></div>`;
+  if (!plan.available) { el.innerHTML = `<div class="card-head"><h2>Map plan</h2>${toggle}</div><div class="empty">${esc(plan.reason)}</div>`; bindPlan(d); return; }
+  const sel = state.planMap && plan.maps.some((m) => m.map === state.planMap) ? state.planMap : plan.maps[0].map;
+  const m = plan.maps.find((x) => x.map === sel), s = m.stats, o = plan.overall;
+  const r12 = (v) => ((v / 100) * 12).toFixed(1), pc = (v) => `${Math.round(v)}%`;
+  // heat cell: tinted by distance from the player's own average (green = better, red = worse); text stays text-colored
+  const heat = (v, avg, n, f, minN = 4) => {
+    if (v == null || (n != null && n < minN)) return `<td class="n muted" title="${n != null ? `${n} games – too few` : "no data"}">–</td>`;
+    const diff = avg == null ? 0 : v - avg, a = Math.min(45, Math.abs(diff) * 2.2);
+    const bg = Math.abs(diff) < 3 ? "transparent" : `color-mix(in srgb, var(${diff > 0 ? "--div-pos" : "--div-neg"}) ${a}%, transparent)`;
+    return `<td class="n heat" style="background:${bg}" title="${diff >= 0 ? "+" : ""}${diff.toFixed(0)} vs average${n != null ? ` · ${n} games` : ""}">${f(v)}</td>`;
+  };
+  const avgCell = (v, f) => `<td class="n">${v == null ? "–" : f(v)}</td>`;
+  const overview = `<div class="table-wrap"><table class="heattable"><thead><tr><th>Map</th><th class="n">Games</th><th class="n">Win %</th>
+      <th class="n" title="Rounds won per 12 on CT">CT /12</th><th class="n" title="Rounds won per 12 on T">T /12</th>
+      <th class="n">Start CT</th><th class="n">Start T</th><th class="n">Lead held</th><th class="n">Comebacks</th><th class="n">Close games</th></tr></thead><tbody>
+    ${plan.maps.map((x) => { const t = x.stats; return `<tr class="${x.map === sel ? "sel" : ""}" data-map="${esc(x.map)}" style="cursor:pointer">
+      <td><b>${esc(x.map)}</b></td><td class="n">${t.n}</td>${heat(t.winrate, o.winrate, t.n, pc, 3)}
+      ${heat(t.ctPct, o.ctPct, null, r12)}${heat(t.tPct, o.tPct, null, r12)}
+      ${heat(t.startCT.rate, o.startCT.rate, t.startCT.n, pc)}${heat(t.startT.rate, o.startT.rate, t.startT.n, pc)}
+      ${heat(t.lead.rate, o.lead.rate, t.lead.n, pc)}${heat(t.trail.rate, o.trail.rate, t.trail.n, pc)}${heat(t.close.rate, o.close.rate, t.close.n, pc)}</tr>`; }).join("")}
+    <tr class="avg"><td>All maps</td><td class="n">${o.n}</td>${avgCell(o.winrate, pc)}${avgCell(o.ctPct, r12)}${avgCell(o.tPct, r12)}
+      ${avgCell(o.startCT.rate, pc)}${avgCell(o.startT.rate, pc)}${avgCell(o.lead.rate, pc)}${avgCell(o.trail.rate, pc)}${avgCell(o.close.rate, pc)}</tr>
+    </tbody></table></div>`;
+  const sideBar = (label, pct, cls) => `<div class="side-row"><span class="side-lbl">${label}</span><div class="track"><div class="fill ${cls}" style="width:${pct == null ? 0 : pct}%"></div><div class="mid"></div></div>
+      <span class="val">${pct == null ? "–" : `${r12(pct)} <span class="muted" style="font-weight:400">/12</span>`}</span></div>`;
+  const rate = (lbl, x) => `<div class="row"><span>${lbl}</span><b>${x.n ? `${Math.round(x.rate)}% <span class="muted" style="font-weight:400">of ${x.n}</span>` : "–"}</b></div>`;
+  const detail = `
+    <div class="grid g3" style="margin:16px 0 0">
+      <div class="card flat"><h2>Sides on ${esc(sel)}</h2><div class="sub">Rounds won per 12-round half${s.sided ? ` · ${s.sided} games with side and half scores` : ""}</div>
+        ${sideBar("CT", s.ctPct, "ct")}${sideBar("T", s.tPct, "t")}
+        <div class="statlist" style="margin-top:8px">${rate("Win % starting CT", s.startCT)}${rate("Win % starting T", s.startT)}</div></div>
+      <div class="card flat"><h2>Halftime</h2><div class="sub">Win % by score at the switch</div><div class="statlist">
+        ${rate("Leading at half", s.lead)}${rate("Tied 6–6", s.tied)}${rate("Trailing at half", s.trail)}${rate("Close games (≤ 3 rounds)", s.close)}${rate("Overtime", s.ot)}</div></div>
+      <div class="card flat"><h2>${me ? "You" : "The player"} on ${esc(sel)}</h2><div class="sub">Individual side ratings</div><div class="statlist">
+        <div class="row"><span>Leetify rating on CT</span><b>${s.ctRating == null ? "–" : signed(s.ctRating, 2)}</b></div>
+        <div class="row"><span>Leetify rating on T</span><b>${s.tRating == null ? "–" : signed(s.tRating, 2)}</b></div>
+        <div class="row"><span>FACEIT rating</span><b>${s.frating == null ? "–" : fmt(s.frating, 2)}</b></div>
+        <div class="row"><span>Win rate</span><b>${pc(s.winrate)} <span class="muted" style="font-weight:400">of ${s.n}</span></b></div></div></div>
+    </div>
+    <h2 style="margin:18px 0 8px">${me ? `What to adjust on ${esc(sel)}` : `How to play against them on ${esc(sel)}`}</h2>
+    ${m.advice.length ? `<ul class="ins-list">${m.advice.map((a) => `<li><span class="ic" style="background:${css(me ? "--warn" : "--series-1")}" aria-hidden="true">${me ? "!" : "→"}</span><span>${esc(a.text)}</span><span></span></li>`).join("")}</ul>`
+      : `<div class="empty" style="padding:12px 0">No clear side or halftime pattern on ${esc(sel)} yet${s.halves < PLAN_HINT ? ` – only ${s.halves} games with half scores` : ""}.</div>`}`;
+  el.innerHTML = `
+    <div class="card-head"><div><h2>${me ? "Your sides, halves and comebacks per map" : "This player's team patterns per map"}</h2>
+      <div class="sub">Team results from FACEIT half scores; starting side from Leetify. Cells are tinted against ${me ? "your" : "their"} own average – green better, red worse; "–" means too few games. Click a map for details.</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${toggle}
+      <select id="planSel" aria-label="Map">${plan.maps.map((x) => `<option value="${esc(x.map)}" ${x.map === sel ? "selected" : ""}>${esc(x.map)} (${x.stats.n})</option>`).join("")}</select></div></div>
+    ${plan.missing.length ? `<div class="notice">${plan.missing.map(esc).join("<br>")}</div>` : ""}
+    ${overview}${detail}
+    <p class="muted" style="font-size:12px;margin:12px 0 0">Coverage: half scores for ${plan.coverage.halves} and starting side for ${plan.coverage.sides} of ${plan.overall.n} Active Duty matches. These are team results – they describe the player's teams, which matters most for regular stacks.</p>`;
+  bindPlan(d);
+}
+
+function bindPlan(d) {
+  $("#planWho")?.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+    state.planWho = b.dataset.who; try { localStorage.setItem("cs2tracker.planWho", state.planWho); } catch {}
+    drawMapPlan(d);
+  }));
+  const sel = $("#planSel"); if (sel) sel.onchange = () => { state.planMap = sel.value; drawMapPlan(d); };
+  document.querySelectorAll("#planCard tr[data-map]").forEach((tr) => (tr.onclick = () => { state.planMap = tr.dataset.map; drawMapPlan(d); }));
 }
 
 const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",
