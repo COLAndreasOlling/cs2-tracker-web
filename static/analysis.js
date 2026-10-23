@@ -787,16 +787,27 @@ const Analysis = (() => {
     const mates = {};
     for (const m of withCtx) for (const t of m.ctx.teammates || []) (mates[t.id] ||= { id: t.id, nick: t.nick, ms: [] }).ms.push(m);
     out.duos = Object.values(mates).filter((x) => x.ms.length >= LOBBY_MIN)
-      .map((x) => { const ids = new Set(x.ms.map((m) => m.id)); const w = group(x.ms), wo = group(withCtx.filter((m) => !ids.has(m.id)));
-        return { id: x.id, nick: x.nick, with: w, without: wo, share: (100 * x.ms.length) / withCtx.length }; })
+      .map((x) => { const ids = new Set(x.ms.map((m) => m.id)), rest = withCtx.filter((m) => !ids.has(m.id));
+        return { id: x.id, nick: x.nick, with: group(x.ms), without: group(rest), share: (100 * x.ms.length) / withCtx.length,
+          oppWith: mean(x.ms.map(diffOf)), oppWithout: mean(rest.map(diffOf)) }; })
       .sort((a, b) => b.with.n - a.with.n).slice(0, 8);
     for (const duo of out.duos) {
-      const dw = duo.with.winrate - (duo.without.winrate ?? duo.with.winrate), dr = (duo.with.rating ?? 0) - (duo.without.rating ?? 0);
-      // 10+ games together, and the rating has to show it too - win rates alone swing a lot in small samples
-      if (duo.with.n < 10 || duo.without.n < 10) continue;
-      if (dr >= 0.12 || (dw >= 25 && dr >= 0.04)) add(S, Math.max(dw / 15, dr / 0.12), `Good duo: ${duo.nick}`, `With ${duo.nick}: ${pc(duo.with.winrate)} won, rating ${f2(duo.with.rating)} – without: ${pc(duo.without.winrate)}, ${f2(duo.without.rating)} (${duo.with.n} games together).`);
-      else if (dr <= -0.12 || (dw <= -25 && dr <= -0.04)) add(W, Math.max(-dw / 15, -dr / 0.12), `Weaker with ${duo.nick}`, `With ${duo.nick}: ${pc(duo.with.winrate)} won, rating ${f2(duo.with.rating)} – without: ${pc(duo.without.winrate)}, ${f2(duo.without.rating)} (${duo.with.n} games together).`,
+      // 10+ games each way; win rates alone swing a lot in small samples, so the rating has to agree
+      if (duo.with.n < 10 || duo.without.n < 10 || duo.with.winrate == null || duo.without.winrate == null) continue;
+      const dw = duo.with.winrate - duo.without.winrate, dr = (duo.with.rating ?? 0) - (duo.without.rating ?? 0);
+      const detail = `With ${duo.nick}: ${pc(duo.with.winrate)} won, your rating ${f2(duo.with.rating)} – without: ${pc(duo.without.winrate)}, ${f2(duo.without.rating)} (${duo.with.n} games together).`;
+      const tougher = duo.oppWith != null && duo.oppWithout != null ? duo.oppWith - duo.oppWithout : null;
+      if ((dr >= 0.12 && dw >= -5) || (dw >= 25 && dr >= 0.04)) add(S, Math.max(dw / 15, dr / 0.12), `Good duo: ${duo.nick}`, detail);
+      else if ((dr <= -0.12 && dw <= 5) || (dw <= -25 && dr <= -0.04)) add(W, Math.max(-dw / 15, -dr / 0.12), `Weaker with ${duo.nick}`, detail,
         "Talk through roles before you queue together – two players wanting the same spot or role is a common cause.");
+      else if (dr >= 0.08 && dw <= -10) // mixed: you play better, the team wins less
+        add(W, -dw / 15, `You play better with ${duo.nick}, but win less`, detail + (tougher != null && tougher >= 0.3
+            ? ` Your lobbies are ${tougher.toFixed(1)} levels tougher when you queue together, which explains part of it.` : ""),
+          tougher != null && tougher >= 0.3
+            ? "Queuing together puts you in stronger lobbies – play more structured in those games (trade, utility, no hero peeks)."
+            : "Your own numbers are fine, so look at the team side: roles, calls and who takes which position when you queue together.");
+      else if (dr <= -0.08 && dw >= 10) // mixed: your numbers drop, but the team wins more
+        add(S, dw / 15, `You win more with ${duo.nick}`, detail + " Your own numbers dip, so you're likely playing the enabling role – that's fine if it wins games.");
     }
 
     // 4. sessions: a new session starts after a 90-minute break
