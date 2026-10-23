@@ -501,6 +501,7 @@ const Analysis = (() => {
 
   const ENTRY_AVG = 0.2; // one opening duel per team per round, shared by 5 players
   const ROLE_MIN = 55; // a role is only named when its score clearly stands out
+  const AWP_SHARE = 0.22; // share of kills with sniper rifles that makes someone the team's AWPer
 
   function weighted(parts) {
     const ok = parts.filter(([v]) => v != null);
@@ -527,7 +528,7 @@ const Analysis = (() => {
     const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
     const known = (label, v, f) => (v == null || Number.isNaN(v) ? [] : [why(label, f(v))]);
     const scores = {
-      awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.35), 0.85], [lin(sig.survival, 25, 45), 0.15]]),
+      awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.3), 0.9], [lin(sig.survival, 25, 45), 0.1]]),
       // one opening duel per team per round => the average player's entry rate is ~0.20; score above that
       entry: weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.55], [lin(sig.tradedOpp, 0.18, 0.32), 0.25], [inv(lin(sig.survival, 22, 40)), 0.2]]),
       support: weighted([[lin(sig.util, 0.9, 2.4), 0.35], [lin(sig.enemiesFlashed, 0.2, 0.9), 0.25], [lin(sig.apr, 0.08, 0.22), 0.2], [inv(lin(sig.kpr, 0.55, 0.95)), 0.2]]),
@@ -541,12 +542,15 @@ const Analysis = (() => {
       lurker: [...known("Trade chances per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct), ...known("Entry attempts per round (low = not first in; ~0.20 is average)", entryRate, f2)],
       rifler: [...known("Trade chances per round", sig.tradeOpp, f2), ...known("Trade kill success", tradeSuccess, pct), ...known("Kills per round", sig.kpr, f2), ...known("ADR", sig.adr, (v) => v.toFixed(1))],
     };
+    // AWP usage decides: AWP picks count as FACEIT "entries", so a star AWPer also has a high entry score.
+    // When a large share of kills come from sniper rifles, the AWP role wins and aggression becomes a trait.
+    const isAwper = sniperShare != null && sniperShare >= AWP_SHARE;
     const ranked = Object.keys(scores).map((k) => ({ id: k, ...ROLE_INFO[k], score: scores[k], why: reasons[k] }))
-      .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+      .sort((a, b) => (isAwper ? (b.id === "awper") - (a.id === "awper") : 0) || (b.score ?? -1) - (a.score ?? -1));
     const [top, second] = ranked;
-    const flexible = top.score == null || top.score < ROLE_MIN;
+    const flexible = !isAwper && (top.score == null || top.score < ROLE_MIN);
     const gap = top.score != null && second?.score != null ? top.score - second.score : null;
-    const confidence = flexible ? "low" : gap >= 15 ? "clear" : "leaning";
+    const confidence = isAwper ? (sniperShare >= 0.3 ? "clear" : "leaning") : flexible ? "low" : gap >= 15 ? "clear" : "leaning";
 
     // traits that sit on top of the role
     const lr = d.leetify?.rating || {}, traits = [];
@@ -558,12 +562,15 @@ const Analysis = (() => {
     if (sig.kpr >= 0.85) traits.push("High fragger");
     if (lr.ct != null && lr.t != null && Math.abs(lr.ct - lr.t) >= 2.5) traits.push(lr.ct > lr.t ? "Stronger on CT" : "Stronger on T");
     if (sniperShare == null) traits.push("AWP use unknown (no FACEIT sniper data)");
+    if (isAwper && scores.entry != null && scores.entry >= ROLE_MIN) traits.push("Aggressive AWP – takes opening picks");
+    if (isAwper && scores.lurker != null && scores.lurker >= ROLE_MIN) traits.push("Passive AWP – holds angles away from the team");
+    if (!isAwper && sniperShare != null && sniperShare >= 0.12) traits.push("Part-time AWPer");
     if (!d.leetify?.available) traits.push("No Leetify data – trade signals unavailable");
 
     return {
       available: true, basis, confidence, traits, ranked,
       primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
-      secondary: !flexible && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
+      secondary: !flexible && !isAwper && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
     };
   }
 
