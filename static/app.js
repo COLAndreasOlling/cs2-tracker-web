@@ -281,7 +281,7 @@ function render(d) {
       ${comp && comp.length ? `<div class="muted" style="margin-top:8px;font-size:12px">Competitive map ranks: ${comp.map((c) => `${esc(c.map)} ${c.rank}`).join(" · ")}</div>` : ""}
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
     </div>
-    <div class="score" title="Composite of Leetify aim/positioning/utility, K/D, ADR, Leetify rating and win rate. 50 ≈ average.">
+    <div class="score" id="scoreBox" tabindex="0" aria-describedby="tip" aria-label="Performance score ${score ?? "unknown"} out of 100 – hover or focus for the breakdown">
       <div class="score-ring">
         <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" fill="none" stroke="${css("--surface-2")}" stroke-width="10"/>
         <circle cx="60" cy="60" r="52" fill="none" stroke="${css("--accent")}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${ringFill} ${ringC}" transform="rotate(-90 60 60)"/></svg>
@@ -373,7 +373,7 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64);
+  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d);
   setupPages(d);
 }
 
@@ -509,6 +509,49 @@ function roleSection(r) {
 }
 
 /** Overall coaching plan: top priorities with evidence and actions, strengths, and a practice routine. */
+/* ------------------------------------------------- performance score tip --- */
+/** The performance score split into its parts for this player (same formula as the engine/server). */
+function scoreParts(d) {
+  const clamp = (x) => Math.max(0, Math.min(100, x)), parts = [];
+  const r = d.leetify.available ? d.leetify.rating || {} : {}, o = d.overall || {};
+  const add = (label, raw, v, w) => parts.push({ label, raw, v: clamp(v), w });
+  if (r.aim != null) add("Aim (Leetify)", r.aim.toFixed(0), r.aim, 0.2);
+  if (r.positioning != null) add("Positioning (Leetify)", r.positioning.toFixed(0), r.positioning, 0.15);
+  if (r.utility != null) add("Utility (Leetify)", r.utility.toFixed(0), r.utility, 0.1);
+  if (o.kd != null) add("K/D", o.kd.toFixed(2), 50 + (o.kd - 1) * 100, 0.2);
+  if (o.adr != null) add("ADR", o.adr.toFixed(0), 50 + (o.adr - 77) * 2, 0.15);
+  if (o.rating != null) add("Leetify rating", signed(o.rating, 1), 50 + o.rating * 10, 0.2);
+  if (o.winrate != null) add("Win rate", `${Math.round(o.winrate)}%`, o.winrate, 0.1);
+  const totalW = parts.reduce((a, p) => a + p.w, 0);
+  for (const p of parts) { p.share = p.w / totalW; p.points = p.v * p.share; }
+  return { parts, total: Math.round(parts.reduce((a, p) => a + p.points, 0)), skipped: totalW < 0.999 };
+}
+
+function scoreTipHtml(d) {
+  const { parts, total, skipped } = scoreParts(d);
+  if (!parts.length) return `<div class="t">No data for a score yet</div>`;
+  const tone = (v) => (v >= 60 ? "up" : v < 40 ? "down" : "");
+  return `<div class="t">Performance score: ${total} / 100</div>
+    <div class="muted" style="margin-bottom:6px">50 is about average. Each part is scored 0–100 and adds its share:</div>
+    <table class="scoretip"><thead><tr><th>Part</th><th class="n">Yours</th><th class="n">Score</th><th class="n">Adds</th></tr></thead><tbody>
+      ${parts.map((p) => `<tr><td>${esc(p.label)}</td><td class="n">${esc(p.raw)}</td><td class="n ${tone(p.v)}">${Math.round(p.v)}</td><td class="n">+${p.points.toFixed(1)}</td></tr>`).join("")}
+      <tr class="sum"><td colspan="3">Total</td><td class="n">${total}</td></tr></tbody></table>
+    <div class="muted" style="margin-top:6px">${skipped ? "Some parts have no data for this player, so the others count for more." : "“Adds” = the part's score × its share of the total; green ≥ 60, red < 40."}</div>`;
+}
+
+function bindScoreTip(d) {
+  const box = $("#scoreBox");
+  if (!box) return;
+  const html = scoreTipHtml(d);
+  const place = (ev) => { showTip(html, ev); tip.classList.add("wide"); };
+  const near = () => { const r = box.getBoundingClientRect(); return { clientX: r.left, clientY: r.bottom }; };
+  box.onmousemove = place;
+  box.onmouseleave = () => { hideTip(); tip.classList.remove("wide"); };
+  box.onfocus = () => place(near());
+  box.onblur = () => { hideTip(); tip.classList.remove("wide"); };
+  box.onclick = () => (tip.hidden ? place(near()) : (hideTip(), tip.classList.remove("wide"))); // tap on phones
+}
+
 /* coaching tips the viewer dismissed, per player (this browser only) */
 const DISMISS_KEY = "cs2tracker.dismissed";
 const dismissedFor = (sid) => { try { return (JSON.parse(localStorage.getItem(DISMISS_KEY)) || {})[sid] || []; } catch { return []; } };
