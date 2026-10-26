@@ -463,6 +463,22 @@ const Analysis = (() => {
     }
     if (mental.evidence.length) areas.push({ id: "mental", title: "Consistency & tilt", maps: [], ...mental });
 
+    // kill conversion: kills that don't turn into round wins, or picks that aren't followed up
+    const ki = killImpact(d);
+    if (ki.available && ki.verdict && ["empty", "oneanddone"].includes(ki.verdict.id)) {
+      const ev = [], acts = [];
+      if (ki.impact && ki.impact.gap <= -IMPACT.notable) {
+        ev.push({ label: "Round impact of your kills vs their volume", value: `${ki.impact.gap.toFixed(1)} Leetify points`, ref: `${ki.impact.n} matches; ±1.0 is notable` });
+        acts.push("After you win a duel, don't re-peek for a second kill alone – hold the advantage, call it, and let the team trade forward.");
+        acts.push("In lost rounds, save instead of hunting exit kills – the money wins the next round.");
+      }
+      if (ki.snowball.gap <= -SNOW.notable) {
+        ev.push({ label: "Kill-rounds with 2+ kills vs expected", value: `${Math.round(100 * ki.snowball.share)}% vs ${Math.round(100 * ki.snowball.expected)}%`, ref: "6+ points below is notable" });
+        acts.push("After a pick, reposition or pre-aim the most likely trade angle instead of staying where you got the kill.");
+      }
+      if (ev.length) areas.push({ id: "conversion", title: "Converting kills into rounds", sev: clampSev(Math.max(-(ki.impact?.gap ?? 0), -ki.snowball.gap * 15) * 0.8), evidence: ev, actions: acts, maps: [] });
+    }
+
     // map pool: a clear worst map
     if (coach?.available && coach.maps.length >= 3) {
       const withWr = coach.maps.filter((m) => m.stats.winrate != null && m.stats.n >= 8);
@@ -893,6 +909,61 @@ const Analysis = (() => {
     return out;
   }
 
-  return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool, mapPlan, lobbies,
+  /* --------------------------------------------------------- kill impact --- */
+  // No API has round-by-round data, so this compares two ratings per match:
+  //  - HLTV 1.0 (the FACEIT rating) rewards kill VOLUME: kills, survival, multi-kill rounds;
+  //  - the Leetify rating rewards kills by how much they moved the team's round-win probability.
+  // Calibrated on 598 real Leetify matches (6 public players, Oct 2026): Leetify ≈ -9.5 + 10.0 × HLTV1
+  // (correlation 0.88, per-match spread ±2.9). Averaged over many matches, a player above the line gets
+  // kills that win rounds; below it, kills that don't convert (exit kills, late kills, bait deaths after a pick).
+  // Snowballing: share of kill-rounds with 2+ kills vs what the kill rate predicts (11.5% + 34% × KPR).
+  const IMPACT = { a: -9.5, b: 10.0, matchSd: 2.9, min: 15, notable: 1.0 };
+  const SNOW = { a: 0.115, b: 0.343, min: 15, notable: 0.06 };
+
+  /** HLTV Rating 1.0 for any match with a multi-kill breakdown (not just FACEIT ones). */
+  function hltv1(m) {
+    const s = m.faceit_stats || m, r = s.rounds, mk = s.multi;
+    if (!r || !mk || mk.length < 5 || s.kills == null || s.deaths == null) return null;
+    const multi = (mk[0] + 4 * mk[1] + 9 * mk[2] + 16 * mk[3] + 25 * mk[4]) / r;
+    return (s.kills / r / 0.679 + (0.7 * (r - s.deaths) / r) / 0.317 + multi / 1.277) / 2.7;
+  }
+
+  function killImpact(d) {
+    const ms = (d.matches || []).filter((m) => hltv1(m) != null);
+    const rated = ms.filter((m) => m.rating != null);
+    const impact = rated.map((m) => ({ m, h: hltv1(m), gap: m.rating - (IMPACT.a + IMPACT.b * hltv1(m)) }));
+    const snow = ms.map((m) => {
+      const mk = (m.faceit_stats || m).multi, kr = sum(mk), kpr = (m.faceit_stats || m).kills / (m.faceit_stats || m).rounds;
+      return kr ? { m, share: (kr - mk[0]) / kr, expected: SNOW.a + SNOW.b * kpr, perKillRound: (m.faceit_stats || m).kills / kr } : null;
+    }).filter(Boolean);
+    const out = { available: snow.length >= SNOW.min, n: snow.length, nImpact: impact.length };
+    if (!out.available) { out.reason = "Needs at least 15 matches with a multi-kill breakdown."; return out; }
+
+    out.snowball = { gap: mean(snow.map((x) => x.share - x.expected)), share: mean(snow.map((x) => x.share)),
+      expected: mean(snow.map((x) => x.expected)), perKillRound: mean(snow.map((x) => x.perKillRound)) };
+    if (impact.length >= IMPACT.min) {
+      const gaps = impact.map((x) => x.gap);
+      out.impact = { gap: mean(gaps), n: impact.length, se: IMPACT.matchSd / Math.sqrt(impact.length),
+        emptyShare: (100 * gaps.filter((g) => g <= -3).length) / gaps.length, swingShare: (100 * gaps.filter((g) => g >= 3).length) / gaps.length };
+      // matches where the numbers looked good but did least for the rounds
+      out.emptyGames = impact.filter((x) => x.h >= 1.05 && x.gap <= -2.5).sort((a, b) => a.gap - b.gap).slice(0, 4)
+        .map((x) => ({ ...x.m, hltv: x.h, gap: x.gap }));
+    } else out.impact = null;
+
+    const ig = out.impact?.gap, sg = out.snowball.gap;
+    const v = (id, name, text, tone) => ({ id, name, text, tone });
+    out.verdict =
+      ig != null && ig >= IMPACT.notable && sg >= SNOW.notable / 2 ? v("snowball", "Snowballer", "Kills come when they matter and lead to more – this player opens rounds up and keeps going.", "good")
+      : ig != null && ig >= IMPACT.notable ? v("impact", "Impact fragger", "Kills move rounds more than the raw numbers suggest – opening picks and kills in man-advantage situations.", "good")
+      : ig != null && ig <= -IMPACT.notable ? v("empty", "Empty fragger", "Kills convert into round wins less than their volume suggests – often exit kills in lost rounds, late kills, or trading a won position away for one pick.", "bad")
+      : sg <= -SNOW.notable ? v("oneanddone", "One-and-done", "Gets the first kill but rarely follows up – the advantage from a pick isn't pushed into a second kill or a won round.", "bad")
+      : sg >= SNOW.notable && (ig == null || ig > -0.5) ? v("snowball", "Snowballer", "Turns a first kill into more kills more often than the kill rate predicts.", "good")
+      : sg >= SNOW.notable ? v("volume", "Multi-kills, little conversion", "Often gets several kills in a round, but those rounds don't swing as much as the kills suggest – check whether the multi-kills come after the round is already decided.", "neutral")
+      : v("balanced", "Balanced", "Kills convert about as expected for this kill rate – no strong sign of empty or snowball fragging.", "neutral");
+    if (ig == null) out.verdict.text += " (Without Leetify data only the snowball part can be judged.)";
+    return out;
+  }
+
+  return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool, mapPlan, lobbies, killImpact,
     getPool: () => [...ACTIVE_DUTY], DEFAULT_POOL, KNOWN_MAPS };
 })();

@@ -308,6 +308,9 @@ function render(d) {
   <div class="section-title">Role &amp; playstyle</div>
   ${roleSection(roleEst)}
 
+  <div class="section-title">Kill impact</div>
+  ${killImpactSection(Analysis.killImpact(d), d)}
+
   <div class="section-title">Progress</div>
   <div class="grid g-2-1">
     <div class="card">
@@ -452,6 +455,37 @@ function extremeMatches(ms, d) {
       <td class="n">${m.rating != null ? signed(m.rating, 2) : faceitRating(m) != null ? `${fmt(faceitRating(m), 2)} <span class="muted" style="font-size:11px">FACEIT</span>` : "–"}</td>
       <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener" title="Open the FACEIT matchroom">FACEIT ↗</a>` : `<span class="muted" title="Matchrooms exist only for FACEIT matches">–</span>`}</td></tr>`).join("")}
   </tbody></table></div>`;
+}
+
+/** Kill impact: do the kills win rounds (Leetify vs HLTV 1.0) and are they followed up (multi-kills)? */
+function killImpactSection(k, d) {
+  if (!k.available) return `<div class="card empty" style="margin-bottom:16px">${esc(k.reason)}</div>`;
+  const tone = { good: "--good", bad: "--bad", neutral: "--text-muted" }[k.verdict.tone];
+  const sg = k.snowball.gap, ig = k.impact?.gap;
+  const row = (label, value, note) => `<div class="row"><span>${label}${note ? `<span class="ref muted" style="display:block;font-size:11px">${note}</span>` : ""}</span><b>${value}</b></div>`;
+  const signedPts = (v, d = 1) => `${v > 0 ? "+" : ""}${v.toFixed(d)}`;
+  const empties = (k.emptyGames || []).map((m) => `<tr><td>${esc(dateLong(m.date))}</td><td>${esc(m.map)}</td><td>${m.outcome ? `<span class="badge ${m.outcome}">${m.outcome[0].toUpperCase()}</span>` : "–"} ${esc(m.score || "")}</td>
+      <td class="n">${m.kills}/${m.deaths}</td><td class="n">${m.hltv.toFixed(2)}</td><td class="n">${signed(m.rating, 1)}</td>
+      <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener">FACEIT ↗</a>` : "–"}</td></tr>`).join("");
+  return `<div class="card" style="margin-bottom:16px">
+    <div class="card-head"><div><h2>${esc(k.verdict.name)}</h2><div class="sub" style="margin-bottom:6px">${esc(k.verdict.text)}</div></div>
+      <span class="pill"><span class="dot" style="background:${css(tone)}"></span>${k.verdict.tone === "good" ? "Kills convert" : k.verdict.tone === "bad" ? "Kills leak value" : "As expected"}</span></div>
+    <div class="grid g2" style="margin:0">
+      <div class="statlist">
+        ${ig != null ? row("Round impact vs kill volume", `${signedPts(ig)} <span class="muted" style="font-weight:400">Leetify pts</span>`, `Leetify rating vs what your HLTV 1.0 predicts, over ${k.impact.n} matches (±${k.impact.se.toFixed(1)} noise; ±1.0 is notable)`)
+          : row("Round impact vs kill volume", "–", "needs Leetify ratings")}
+        ${k.impact ? row("Matches with empty kills", `${Math.round(k.impact.emptyShare)}%`, "Leetify impact 3+ points below what the numbers predict") : ""}
+        ${k.impact ? row("Matches where kills swung rounds", `${Math.round(k.impact.swingShare)}%`, "3+ points above") : ""}
+      </div>
+      <div class="statlist">
+        ${row("Kill-rounds with 2+ kills", `${Math.round(100 * k.snowball.share)}% <span class="muted" style="font-weight:400">vs ${Math.round(100 * k.snowball.expected)}% expected</span>`, `for this kill rate · ${signedPts(100 * sg, 0)} pts (±6 is notable)`)}
+        ${row("Kills per round with a kill", k.snowball.perKillRound.toFixed(2), "how far a round goes once you get the first one")}
+      </div>
+    </div>
+    ${empties ? `<h2 style="margin:16px 0 6px;font-size:14px">Good numbers, little impact</h2><div class="sub">Matches where the kills looked fine but did least for the rounds – worth a demo review</div>
+      <div class="table-wrap"><table><thead><tr><th>Date</th><th>Map</th><th>Result</th><th class="n">K/D</th><th class="n">HLTV 1.0</th><th class="n">Leetify</th><th>Matchroom</th></tr></thead><tbody>${empties}</tbody></table></div>` : ""}
+    <p class="muted" style="font-size:12px;margin:12px 0 0">No API has round-by-round data, so this compares two ratings: HLTV 1.0 counts kill volume, the Leetify rating counts how much each kill changed the round-win chance. Calibrated on 598 real matches (Leetify ≈ −9.5 + 10 × HLTV 1.0). Open a teammate's report to see theirs.</p>
+  </div>`;
 }
 
 /** Estimated role: primary/secondary, traits, and every role's score with the reasons behind it. */
