@@ -472,19 +472,21 @@ function killImpactSection(k, d) {
       <span class="pill"><span class="dot" style="background:${css(tone)}"></span>${k.verdict.tone === "good" ? "Kills convert" : k.verdict.tone === "bad" ? "Kills leak value" : "As expected"}</span></div>
     <div class="grid g2" style="margin:0">
       <div class="statlist">
+        ${k.level.leetify != null ? row("Round impact per match", `${signedPts(k.level.leetify)} <span class="muted" style="font-weight:400">Leetify rating</span>`, "0 = average player · +1.0 solid · +2.5 or more high")
+          : row("Kill volume per match", `${k.level.hltv.toFixed(2)} <span class="muted" style="font-weight:400">HLTV 1.0</span>`, "1.00 = average player · 1.05 solid · 1.15 or more high")}
         ${ig != null ? row("Round impact vs kill volume", `${signedPts(ig)} <span class="muted" style="font-weight:400">Leetify pts</span>`, `Leetify rating vs what your HLTV 1.0 predicts, over ${k.impact.n} matches (±${k.impact.se.toFixed(1)} noise; ±1.0 is notable)`)
           : row("Round impact vs kill volume", "–", "needs Leetify ratings")}
         ${k.impact ? row("Matches with empty kills", `${Math.round(k.impact.emptyShare)}%`, "Leetify impact 3+ points below what the numbers predict") : ""}
         ${k.impact ? row("Matches where kills swung rounds", `${Math.round(k.impact.swingShare)}%`, "3+ points above") : ""}
       </div>
       <div class="statlist">
-        ${row("Kill-rounds with 2+ kills", `${Math.round(100 * k.snowball.share)}% <span class="muted" style="font-weight:400">vs ${Math.round(100 * k.snowball.expected)}% expected</span>`, `for this kill rate · ${signedPts(100 * sg, 0)} pts (±6 is notable)`)}
+        ${row("Kill-rounds with 2+ kills", `${Math.round(100 * k.snowball.share)}% <span class="muted" style="font-weight:400">vs ${Math.round(100 * k.snowball.avgRef)}% for an average player</span>`, `${signedPts(100 * k.snowball.abs, 0)} pts (±7 is notable) · ${Math.round(100 * k.snowball.expected)}% expected for this kill rate`)}
         ${row("Kills per round with a kill", k.snowball.perKillRound.toFixed(2), "how far a round goes once you get the first one")}
       </div>
     </div>
     ${empties ? `<h2 style="margin:16px 0 6px;font-size:14px">Good numbers, little impact</h2><div class="sub">Matches where the kills looked fine but did least for the rounds – worth a demo review</div>
       <div class="table-wrap"><table><thead><tr><th>Date</th><th>Map</th><th>Result</th><th class="n">K/D</th><th class="n">HLTV 1.0</th><th class="n">Leetify</th><th>Matchroom</th></tr></thead><tbody>${empties}</tbody></table></div>` : ""}
-    <p class="muted" style="font-size:12px;margin:12px 0 0">No API has round-by-round data, so this compares two ratings: HLTV 1.0 counts kill volume, the Leetify rating counts how much each kill changed the round-win chance. Calibrated on 598 real matches (Leetify ≈ −9.5 + 10 × HLTV 1.0). Open a teammate's report to see theirs.</p>
+    <p class="muted" style="font-size:12px;margin:12px 0 0">No API has round-by-round data. The verdict compares impact (Leetify rating) and multi-kill rounds with an average player; the "vs kill volume" line shows whether the kills are worth more or less than HLTV 1.0 suggests. Calibrated on 598 real matches (Leetify ≈ −9.5 + 10 × HLTV 1.0). Open a teammate's report to see theirs.</p>
   </div>`;
 }
 

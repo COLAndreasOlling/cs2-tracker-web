@@ -959,6 +959,11 @@ const Analysis = (() => {
   // Snowballing: share of kill-rounds with 2+ kills vs what the kill rate predicts (11.5% + 34% × KPR).
   const IMPACT = { a: -9.5, b: 10.0, matchSd: 2.9, min: 15, notable: 1.0 };
   const SNOW = { a: 0.115, b: 0.343, min: 15, notable: 0.06 };
+  // Absolute references for an AVERAGE player (the verdict is judged against these, not against the
+  // player's own volume): Leetify rating averages 0 by definition; HLTV 1.0 averages 1.00; an average
+  // kill rate of ~0.70 per round gives ~35% of kill-rounds with 2+ kills on the calibration line.
+  const ABS = { impactHigh: 2.5, impactGood: 1.0, impactLow: -1.5, hltvHigh: 1.15, hltvGood: 1.05, hltvLow: 0.9,
+    snowAvg: SNOW.a + SNOW.b * 0.7, snowNotable: 0.07, snowWithImpact: 0.05 };
 
   /** HLTV Rating 1.0 for any match with a multi-kill breakdown (not just FACEIT ones). */
   function hltv1(m) {
@@ -991,16 +996,31 @@ const Analysis = (() => {
     } else out.impact = null;
 
     const ig = out.impact?.gap, sg = out.snowball.gap;
+    // absolute level: Leetify rating (round-win impact), or HLTV 1.0 when there's no Leetify data
+    const lvl = out.impact ? mean(impact.map((x) => x.m.rating)) : null, hl = mean(ms.map(hltv1));
+    out.level = { leetify: lvl, hltv: hl };
+    const impactHigh = lvl != null ? lvl >= ABS.impactHigh : hl >= ABS.hltvHigh;
+    const impactLow = lvl != null ? lvl <= ABS.impactLow : hl <= ABS.hltvLow;
+    const impactGood = lvl != null ? lvl >= ABS.impactGood : hl >= ABS.hltvGood;
+    const snowAbs = out.snowball.share - ABS.snowAvg; // vs an average player
+    out.snowball.abs = snowAbs; out.snowball.avgRef = ABS.snowAvg;
+    const snowHigh = snowAbs >= ABS.snowNotable, snowLow = snowAbs <= -ABS.snowNotable;
+    const leaks = ig != null && ig <= -IMPACT.notable, extra = ig != null && ig >= IMPACT.notable;
     const v = (id, name, text, tone) => ({ id, name, text, tone });
     out.verdict =
-      ig != null && ig >= IMPACT.notable && sg >= SNOW.notable / 2 ? v("snowball", "Snowballer", "Kills come when they matter and lead to more – this player opens rounds up and keeps going.", "good")
-      : ig != null && ig >= IMPACT.notable ? v("impact", "Impact fragger", "Kills move rounds more than the raw numbers suggest – opening picks and kills in man-advantage situations.", "good")
-      : ig != null && ig <= -IMPACT.notable ? v("empty", "Empty fragger", "Kills convert into round wins less than their volume suggests – often exit kills in lost rounds, late kills, or trading a won position away for one pick.", "bad")
-      : sg <= -SNOW.notable ? v("oneanddone", "One-and-done", "Gets the first kill but rarely follows up – the advantage from a pick isn't pushed into a second kill or a won round.", "bad")
-      : sg >= SNOW.notable && (ig == null || ig > -0.5) ? v("snowball", "Snowballer", "Turns a first kill into more kills more often than the kill rate predicts.", "good")
-      : sg >= SNOW.notable ? v("volume", "Multi-kills, little conversion", "Often gets several kills in a round, but those rounds don't swing as much as the kills suggest – check whether the multi-kills come after the round is already decided.", "neutral")
-      : v("balanced", "Balanced", "Kills convert about as expected for this kill rate – no strong sign of empty or snowball fragging.", "neutral");
-    if (ig == null) out.verdict.text += " (Without Leetify data only the snowball part can be judged.)";
+      // with clearly high impact, a smaller multi-kill edge already means the kills come in chains
+      impactHigh && snowAbs >= ABS.snowWithImpact ? v("snowball", "Snowballer", "Wins rounds with chains of kills: well above average impact, and a first kill often turns into two or more.", "good")
+      : impactHigh ? v("impact", "Impact fragger", "Well above average impact per round – the kills come when they matter, even if they don't often come in chains.", "good")
+      : snowHigh && leaks ? v("volume", "Multi-kills, little conversion", "Often gets several kills in a round, but those rounds don't swing as much as the kills suggest – check whether the multi-kills come after the round is already decided.", "neutral")
+      : leaks && !snowHigh ? v("empty", "Empty fragger", "Kills convert into round wins less than their volume suggests – often exit kills in lost rounds, late kills, or trading a won position away for one pick.", "bad")
+      : snowLow && !impactHigh ? v("oneanddone", "One-and-done", "Gets the first kill but rarely follows up – the advantage from a pick isn't pushed into a second kill or a won round.", "bad")
+      : snowHigh ? v("snowball", "Snowballer", "A first kill often turns into two or more – more chains than an average player.", "good")
+      : impactGood ? v("solid", "Solid impact", "Above average impact per round – kills tend to matter, without being a standout snowballer.", "good")
+      : impactLow ? v("lowimpact", "Low impact", "Below average impact per round – not many kills that decide rounds.", "bad")
+      : v("balanced", "Balanced", "Around average impact, and kills convert about as expected – no strong sign of empty or snowball fragging.", "neutral");
+    if (extra && out.verdict.tone !== "bad") out.verdict.text += " Kills are also worth more than their raw numbers suggest.";
+    if (leaks && ["snowball", "impact"].includes(out.verdict.id)) out.verdict.text += " Some kills still don't convert – see the matches below.";
+    if (ig == null) out.verdict.text += " (Without Leetify data, impact is judged from the FACEIT rating instead.)";
     return out;
   }
 
