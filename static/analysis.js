@@ -481,7 +481,9 @@ const Analysis = (() => {
 
     // map pool: a clear worst map
     if (coach?.available && coach.maps.length >= 3) {
-      const withWr = coach.maps.filter((m) => m.stats.winrate != null && m.stats.n >= 8);
+      const poolGames = coach.maps.reduce((a, m) => a + m.stats.n, 0);
+      // only maps that are a real share of your games - a rarely played map isn't worth a top slot
+      const withWr = coach.maps.filter((m) => m.stats.winrate != null && m.stats.n >= 8 && m.stats.n >= MAP_SHARE_MIN * poolGames);
       const worst = withWr.reduce((a, b) => (b.stats.winrate < a.stats.winrate ? b : a), withWr[0]);
       const avg = withWr.reduce((a, m) => a + m.stats.winrate * m.stats.n, 0) / withWr.reduce((a, m) => a + m.stats.n, 0);
       if (worst && avg - worst.stats.winrate >= 12)
@@ -492,6 +494,43 @@ const Analysis = (() => {
     }
 
     areas.sort((a, b) => b.sev - a.sev);
+
+    // Backfill: smaller, still-useful tips that take a slot when a stronger one is dismissed.
+    const extra = [];
+    //  a) "room to grow" - stats that aren't weak but aren't good yet either
+    for (const a of AREAS) {
+      if (areas.some((x) => x.id === a.id)) continue;
+      const ev = [], acts = [];
+      let closeness = 0;
+      for (const ch of a.checks) {
+        if (ch.noLeetify && lt.available) continue;
+        const v = ch.get(c);
+        if (v == null || Number.isNaN(v) || ch.weak(v) || ch.good(v)) continue;
+        ev.push({ label: ch.label, value: ch.fmt(v), ref: ch.ref });
+        acts.push(ch.action);
+        closeness = Math.max(closeness, Math.abs(ch.sev(v))); // how far from "weak" it still is (smaller = closer)
+      }
+      if (ev.length) extra.push({ id: `${a.id}-grow`, title: `${a.title}: room to grow`, sev: 0.15 + 0.15 / (1 + closeness), evidence: ev, actions: [...new Set(acts)], maps: [], tier: "grow" });
+    }
+    //  b) the top tip on each map you actually play
+    if (coach?.available) {
+      const poolGames = coach.maps.reduce((a, m) => a + m.stats.n, 0);
+      for (const m of coach.maps) {
+        const t = m.tips.find((x) => !["team"].includes(x.key));
+        if (!t || m.stats.n < MAP_SHARE_MIN * poolGames) continue;
+        extra.push({ id: `map-${m.map}-${t.key}`, title: `On ${m.map}: ${KEY_TITLES[t.key] ? KEY_TITLES[t.key].toLowerCase() : t.key.endsWith("side") ? `${t.key === "t_side" ? "T" : "CT"} side` : "map habit"}`,
+          sev: 0.2 + Math.min(0.3, t.gap), evidence: [{ label: `${m.stats.n} games on ${m.map}`, value: `${Math.round((100 * m.stats.n) / poolGames)}% of your matches`, ref: "compared with your other maps", pattern: true }],
+          actions: [t.text], maps: [m.map], tier: "map" });
+      }
+    }
+    //  c) sessions, lobbies and duos (fatigue and tilt are already in "Consistency & tilt")
+    for (const w of lob.insights?.weaknesses || []) {
+      if (/^Fades in long sessions|^Tilts after a loss/.test(w.title)) continue;
+      extra.push({ id: `lobby-${w.title}`, title: w.title, sev: 0.2 + Math.min(0.3, w.weight / 10),
+        evidence: [{ label: w.detail, value: "", ref: "from the Sessions & teammates tab", pattern: true }], actions: w.action ? [w.action] : [], maps: [], tier: "lobby" });
+    }
+    extra.sort((a, b) => b.sev - a.sev);
+    areas.push(...extra);
     const priorities = areas.slice(0, 3), more = areas.slice(3);
     // a short weekly routine from the top priorities' first actions
     const routine = [{ area: "Every session", text: "Warm up 10–15 minutes before your first match: deathmatch at head height, then one prefire run of the map you'll play." },
@@ -518,6 +557,7 @@ const Analysis = (() => {
 
   const ENTRY_AVG = 0.2; // one opening duel per team per round, shared by 5 players
   const ROLE_MIN = 55; // a role is only named when its score clearly stands out
+  const MAP_SHARE_MIN = 0.15; // map tips only for maps that are at least this share of your Active Duty games
   const AWP_SHARE = 0.22; // share of kills with sniper rifles that makes someone the team's AWPer
 
   function weighted(parts) {

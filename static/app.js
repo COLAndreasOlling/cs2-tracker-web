@@ -520,7 +520,7 @@ function setDismissed(sid, ids) {
 function planSection(plan, sid) {
   const dismissed = dismissedFor(sid);
   const visible = plan.areas.filter((a) => !dismissed.includes(a.id));
-  const priorities = visible.slice(0, 3), more = visible.slice(3);
+  const priorities = visible.slice(0, 3), more = visible.slice(3, 8); // the rest stays in reserve for dismissals
   const restore = dismissed.length ? `<button class="btn small ghost" id="planRestore" type="button">Show dismissed (${dismissed.length})</button>` : "";
   if (!priorities.length)
     return `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>${plan.areas.length ? "All tips dismissed" : "No clear weak spots"}</h2>${restore}</div>
@@ -529,6 +529,7 @@ function planSection(plan, sid) {
     <div class="card prio">
       <button class="prio-x" type="button" data-dismiss="${esc(a.id)}" title="Dismiss this tip – the next one moves up" aria-label="Dismiss ${esc(a.title)}">×</button>
       <div class="prio-head"><span class="prio-num">${i + 1}</span><div><h2>${esc(a.title)}</h2>
+        ${a.tier ? `<div class="sub" style="margin:2px 0 0">${{ grow: "Not weak – but the next step up", map: "Map-specific tip", lobby: "From your sessions & teammates" }[a.tier]}</div>` : ""}
         ${a.maps.length ? `<div class="sub" style="margin:2px 0 0">Shows up most on: ${esc(a.maps.join(", "))}</div>` : ""}</div></div>
       ${a.evidence.length ? `<div class="statlist" style="margin:10px 0">${a.evidence.map((e) => `<div class="row"><span>${esc(e.label)}<span class="ref muted" style="display:block;font-size:11px">${esc(e.ref)}</span></span><b class="${e.pattern ? "" : "down"}">${esc(e.value)}</b></div>`).join("")}</div>` : ""}
       <div class="prio-do">What to do</div>
