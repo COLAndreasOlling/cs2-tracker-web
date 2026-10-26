@@ -272,6 +272,10 @@ select { font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 6px; b
 .scoretip { width: 100%; border-collapse: collapse; font-size: 12px; }
 .scoretip th, .scoretip td { padding: 3px 6px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 .scoretip th { font-size: 10px; }
+.scoretip tr.refrow td { font-size: 10px; color: var(--text-muted); padding-top: 0; border-bottom: 1px solid var(--grid); white-space: normal; }
+.scoretip tr:has(+ tr.refrow) td { border-bottom: 0; }
+.verdict-tip { cursor: help; border-radius: 8px; }
+.verdict-tip:focus-visible { outline: 2px solid var(--series-1); outline-offset: 4px; }
 .scoretip tr.sum td { font-weight: 700; border-bottom: 0; border-top: 1px solid var(--border); }
 .score { cursor: help; border-radius: 12px; }
 .score:focus-visible { outline: 2px solid var(--series-1); outline-offset: 4px; }

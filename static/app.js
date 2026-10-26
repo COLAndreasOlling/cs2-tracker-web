@@ -374,6 +374,7 @@ function render(d) {
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
   drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d);
+  { const k = Analysis.killImpact(d); if (k.available) bindHoverTip($("#killVerdict"), killTipHtml(k)); }
   setupPages(d);
 }
 
@@ -468,7 +469,7 @@ function killImpactSection(k, d) {
       <td class="n">${m.kills}/${m.deaths}</td><td class="n">${m.hltv.toFixed(2)}</td><td class="n">${signed(m.rating, 1)}</td>
       <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener">FACEIT ↗</a>` : "–"}</td></tr>`).join("");
   return `<div class="card" style="margin-bottom:16px">
-    <div class="card-head"><div><h2>${esc(k.verdict.name)}</h2><div class="sub" style="margin-bottom:6px">${esc(k.verdict.text)}</div></div>
+    <div class="card-head verdict-tip" id="killVerdict" tabindex="0" aria-describedby="tip" aria-label="${esc(k.verdict.name)} – hover or focus to see how this verdict was reached"><div><h2>${esc(k.verdict.name)}</h2><div class="sub" style="margin-bottom:6px">${esc(k.verdict.text)}</div></div>
       <span class="pill"><span class="dot" style="background:${css(tone)}"></span>${k.verdict.tone === "good" ? "Kills convert" : k.verdict.tone === "bad" ? "Kills leak value" : "As expected"}</span></div>
     <div class="grid g2" style="margin:0">
       <div class="statlist">
@@ -541,17 +542,49 @@ function scoreTipHtml(d) {
     <div class="muted" style="margin-top:6px">${skipped ? "Some parts have no data for this player, so the others count for more." : "“Adds” = the part's score × its share of the total; green ≥ 60, red < 40."}</div>`;
 }
 
-function bindScoreTip(d) {
-  const box = $("#scoreBox");
-  if (!box) return;
-  const html = scoreTipHtml(d);
+/** Show `html` in the tooltip on hover, keyboard focus, or a tap (phones). */
+function bindHoverTip(el, html) {
+  if (!el) return;
   const place = (ev) => { showTip(html, ev); tip.classList.add("wide"); };
-  const near = () => { const r = box.getBoundingClientRect(); return { clientX: r.left, clientY: r.bottom }; };
-  box.onmousemove = place;
-  box.onmouseleave = () => { hideTip(); tip.classList.remove("wide"); };
-  box.onfocus = () => place(near());
-  box.onblur = () => { hideTip(); tip.classList.remove("wide"); };
-  box.onclick = () => (tip.hidden ? place(near()) : (hideTip(), tip.classList.remove("wide"))); // tap on phones
+  const close = () => { hideTip(); tip.classList.remove("wide"); };
+  const near = () => { const r = el.getBoundingClientRect(); return { clientX: r.left, clientY: r.bottom }; };
+  el.onmousemove = place;
+  el.onmouseleave = close;
+  el.onfocus = () => place(near());
+  el.onblur = close;
+  el.onclick = (e) => { if (e.target.closest("a, button")) return; tip.hidden ? place(near()) : close(); };
+}
+const bindScoreTip = (d) => bindHoverTip($("#scoreBox"), scoreTipHtml(d));
+
+/** How the kill-impact verdict was reached, in plain words. */
+function killTipHtml(k) {
+  const sgn = (v, dd = 1) => `${v > 0 ? "+" : ""}${v.toFixed(dd)}`;
+  const lvl = k.level.leetify, chains = 100 * k.snowball.abs, gap = k.impact?.gap;
+  const band = (v, steps) => steps.find(([test]) => test(v))[1];
+  const impactBand = lvl != null
+    ? band(lvl, [[(v) => v >= 2.5, ["high", "up"]], [(v) => v >= 1.0, ["solid", "up"]], [(v) => v <= -1.5, ["low", "down"]], [() => true, ["around average", ""]]])
+    : band(k.level.hltv, [[(v) => v >= 1.15, ["high", "up"]], [(v) => v >= 1.05, ["solid", "up"]], [(v) => v <= 0.9, ["low", "down"]], [() => true, ["around average", ""]]]);
+  const chainBand = band(chains, [[(v) => v >= 7, ["more chains than average", "up"]], [(v) => v >= 5, ["slightly more chains", "up"]], [(v) => v <= -7, ["fewer chains than average", "down"]], [() => true, ["about average", ""]]]);
+  const gapBand = gap == null ? null : band(gap, [[(v) => v >= 1, ["worth more than they look", "up"]], [(v) => v <= -1, ["worth less than they look", "down"]], [() => true, ["as expected", ""]]]);
+  const why = {
+    snowball: lvl != null && lvl >= 2.5 ? "Impact is high and kills come in chains (at least 5 points above average)." : "Kills come in chains clearly more often than for an average player.",
+    impact: "Impact is high (+2.5 or more), but kills don't come in chains more than usual.",
+    solid: "Impact is above average (+1.0 or more) without being high.",
+    volume: "Lots of multi-kill rounds, but the kills are worth less than their volume suggests.",
+    empty: "The kills are worth clearly less than their volume suggests (1.0+ below the line).",
+    oneanddone: "Fewer multi-kill rounds than an average player (7+ points below) and impact isn't high.",
+    lowimpact: "Impact is below average (−1.5 or lower).",
+    balanced: "None of the signals is clearly above or below average.",
+  }[k.verdict.id] || "";
+  const line = (label, value, [word, cls], ref) => `<tr><td>${label}</td><td class="n">${value}</td><td class="${cls}">${word}</td></tr>${ref ? `<tr class="refrow"><td colspan="3">${ref}</td></tr>` : ""}`;
+  return `<div class="t">Why “${esc(k.verdict.name)}”</div>
+    <table class="scoretip"><tbody>
+      ${lvl != null ? line("Round impact", sgn(lvl), impactBand, `Leetify rating per match · 0 = average, +1.0 solid, +2.5 high`)
+        : line("Kill volume", k.level.hltv.toFixed(2), impactBand, `HLTV 1.0 (no Leetify) · 1.00 = average, 1.15 high`)}
+      ${line("Kill chains", `${Math.round(100 * k.snowball.share)}%`, chainBand, `kill-rounds with 2+ kills · ${sgn(chains, 0)} pts vs ${Math.round(100 * k.snowball.avgRef)}% for an average player`)}
+      ${gapBand ? line("Kills vs their volume", sgn(gap), gapBand, `Leetify vs what HLTV 1.0 predicts · ±1.0 is notable (${k.impact.n} matches)`) : ""}
+    </tbody></table>
+    <div style="margin-top:8px"><b>→ ${esc(k.verdict.name)}:</b> ${esc(why)}</div>`;
 }
 
 /* coaching tips the viewer dismissed, per player (this browser only) */
