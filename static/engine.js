@@ -866,5 +866,18 @@ const Engine = (() => {
     return added;
   }
 
-  return { handle, exportHistory, importHistory, lockKey, unlock, signOut };
+  /** The same summary for a subset of the matches (the platform toggle). Works on server summaries too. */
+  function rebuild(d, keep) {
+    const ms = (d.matches || []).filter(keep);
+    const s = { ...d, matches: ms };
+    s.overall = aggregate(ms);
+    s.form = { last10: aggregate(ms.slice(0, 10)), last20: aggregate(ms.slice(0, 20)), previous: aggregate(ms.slice(10)) };
+    s.streaks = streaks(ms);
+    s.map_pool = mapPool(ms, d.faceit || {});
+    s.insights = insights(s);
+    s.score = performanceScore(s);
+    return s;
+  }
+
+  return { handle, exportHistory, importHistory, lockKey, unlock, signOut, rebuild };
 })();

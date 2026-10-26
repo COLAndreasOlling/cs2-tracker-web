@@ -10,7 +10,7 @@ const css = (name) => getComputedStyle(document.documentElement).getPropertyValu
 const dateShort = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
 const dateLong = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "");
 
-let state = { data: null, progressTab: "elo", formMetric: "rating", page: 0, filters: { source: "", map: "", outcome: "" } };
+let state = { data: null, progressTab: "elo", formMetric: "rating", histPage: 0, filters: { source: "", map: "", outcome: "" } };
 
 /* ---------------------------------------------------------- map pool --- */
 const POOL_KEY = "cs2tracker.mapPool";
@@ -24,7 +24,7 @@ $("#themeBtn").onclick = () => {
     : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";
   try { localStorage.setItem("theme", document.documentElement.dataset.theme); } catch {}
-  if (state.data) render(state.data);
+  if (state.data) renderView();
 };
 
 /* ------------------------------------------------------------ tooltip --- */
@@ -194,16 +194,40 @@ async function loadHome() {
   }));
 }
 
+/* ------------------------------------------------------------ platforms --- */
+// Premier and Valve competitive matches come from Leetify (Valve has no public match API).
+const PLATFORMS = [
+  ["all", "All", () => true],
+  ["faceit", "FACEIT", (m) => m.source === "faceit"],
+  ["premier", "Premier", (m) => m.source === "premier"],
+  ["competitive", "Competitive", (m) => m.source === "competitive"],
+  ["other", "Other", (m) => !["faceit", "premier", "competitive"].includes(m.source)],
+];
+try { state.platform = new URLSearchParams(location.search).get("src") || "all"; } catch { state.platform = "all"; }
+const platformDef = (k) => PLATFORMS.find((p) => p[0] === k) || PLATFORMS[0];
+/** The report for the selected platform (the full data stays in state.data). */
+function viewOf(d) {
+  const [key, , keep] = platformDef(state.platform);
+  if (key === "all" || !d.matches.some(keep)) return d;
+  return Engine.rebuild(d, keep);
+}
+function renderView() {
+  const y = window.scrollY;
+  render(viewOf(state.data));
+  window.scrollTo({ top: y });
+}
+
 async function lookup(q) {
   if (!q) return;
   $("#q").value = q === "demo" ? "" : q;
   $("#welcome").hidden = true; $("#report").hidden = true; $("#error").hidden = true; $("#loading").hidden = false;
   const tab = new URLSearchParams(location.search).get("tab");
-  history.replaceState(null, "", "?q=" + encodeURIComponent(q) + (tab ? "&tab=" + encodeURIComponent(tab) : ""));
+  const src = new URLSearchParams(location.search).get("src");
+  history.replaceState(null, "", "?q=" + encodeURIComponent(q) + (tab ? "&tab=" + encodeURIComponent(tab) : "") + (src ? "&src=" + encodeURIComponent(src) : ""));
   try {
     const d = await api("/api/player?q=" + encodeURIComponent(q));
-    state = { ...state, data: d, page: 0, filters: { source: "", map: "", outcome: "" } };
-    render(d);
+    state = { ...state, data: d, histPage: 0, filters: { source: "", map: "", outcome: "" } };
+    render(viewOf(d));
   } catch (e) {
     $("#error").textContent = e.message; $("#error").hidden = false; $("#welcome").hidden = false;
   } finally { $("#loading").hidden = true; }
@@ -218,6 +242,7 @@ function delta(now, prev, d = 2, invert = false) {
 }
 
 function render(d) {
+  state.view = d; // the report currently shown (all platforms, or the selected one)
   const fc = d.faceit, lt = d.leetify, o = d.overall || {}, f10 = d.form.last10 || {}, prev = d.form.previous || {};
   const id = d.identity;
   const notices = [];
@@ -261,6 +286,7 @@ function render(d) {
       <button role="tab" data-page="integrity">Integrity check${integDot ? `<span class="tabdot" style="background:${css(integDot)}" aria-hidden="true"></span>` : ""}</button>
       <button role="tab" data-page="coaching">Coaching${tipCount ? `<span class="tabcount">${tipCount}</span>` : ""}</button>
     </div>
+    ${platformBar()}
     <div class="pagebar-player" id="pagebarPlayer" aria-hidden="true">
       ${id.avatar ? `<img src="${esc(id.avatar)}" alt="">` : ""}<b>${esc(id.name)}</b>${level ? `<span class="muted">${esc(level)}</span>` : ""}${score != null ? `<span class="muted">Score ${score}</span>` : ""}
     </div>
@@ -292,7 +318,7 @@ function render(d) {
   </div>
 
   <section class="page" data-page="summary">
-  <div class="section-title">Last ${o.matches || 0} matches · all platforms</div>
+  <div class="section-title">Last ${o.matches || 0} matches · ${state.platform === "all" ? "all platforms" : esc(platformDef(state.platform)[1])}</div>
   <div class="kpis">
     ${kpi("Win rate", pct(o.winrate), delta(f10.winrate, prev.winrate, 1))}
     ${kpi("K/D", fmt(o.kd, 2), delta(f10.kd, prev.kd, 2))}
@@ -327,7 +353,7 @@ function render(d) {
     <div class="chart" id="formChart"></div>
   </div>
 
-  <div class="section-title">Skill profile (Leetify)</div>
+  <div class="section-title">Skill profile (Leetify)${state.platform !== "all" ? " · lifetime, all platforms" : ""}</div>
   ${lt.available ? skillSection(lt) : `<div class="card empty">No Leetify data (${esc(lt.reason)}), so aim mechanics – crosshair placement, reaction time, spray – aren't available.${fc.available ? " Utility, entry and clutch stats come from FACEIT instead: see the FACEIT section below and the Coaching tab." : ""}</div>`}
 
   <div class="section-title">FACEIT</div>
@@ -373,7 +399,7 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d);
+  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d); bindPlatformBar();
   { const k = Analysis.killImpact(d); if (k.available) bindHoverTip($("#killVerdict"), killTipHtml(k)); }
   setupPages(d);
 }
@@ -512,6 +538,27 @@ function roleSection(r) {
 }
 
 /** Overall coaching plan: top priorities with evidence and actions, strengths, and a practice routine. */
+/** Platform toggle: only platforms this player has, with match counts. */
+function platformBar() {
+  const full = state.data?.matches || [];
+  const opts = PLATFORMS.map(([k, label, keep]) => [k, label, k === "all" ? full.length : full.filter(keep).length]).filter(([k, , n]) => k === "all" || n > 0);
+  if (opts.length <= 2) return ""; // only one platform – nothing to switch
+  const cur = opts.some(([k]) => k === state.platform) ? state.platform : "all";
+  return `<div class="tabs srcbar" id="srcBar" role="group" aria-label="Platform">${opts.map(([k, label, n]) =>
+    `<button data-src="${k}" class="${k === cur ? "on" : ""}" aria-pressed="${k === cur}">${label} <span class="muted">${n}</span></button>`).join("")}</div>`;
+}
+
+function bindPlatformBar() {
+  $("#srcBar")?.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => {
+    state.platform = b.dataset.src;
+    state.histPage = 0; state.filters.source = ""; // the history's own platform filter would fight the toggle
+    const u = new URL(location.href);
+    if (state.platform === "all") u.searchParams.delete("src"); else u.searchParams.set("src", state.platform);
+    history.replaceState(null, "", u);
+    renderView();
+  }));
+}
+
 /* ------------------------------------------------- performance score tip --- */
 /** The performance score split into its parts for this player (same formula as the engine/server). */
 function scoreParts(d) {
@@ -940,8 +987,8 @@ function drawMatches(d) {
   const sources = [...new Set(d.matches.map((m) => m.source))].sort(), maps = [...new Set(d.matches.map((m) => m.map))].sort();
   const list = d.matches.filter((m) => (!f.source || m.source === f.source) && (!f.map || m.map === f.map) && (!f.outcome || m.outcome === f.outcome));
   const pages = Math.max(1, Math.ceil(list.length / per));
-  state.page = Math.min(state.page, pages - 1);
-  const rows = list.slice(state.page * per, state.page * per + per);
+  state.histPage = Math.min(state.histPage, pages - 1);
+  const rows = list.slice(state.histPage * per, state.histPage * per + per);
   const agg = summarize(list);
   const opt = (vals, cur, all) => `<option value="">${all}</option>` + vals.map((v) => `<option ${v === cur ? "selected" : ""}>${esc(v)}</option>`).join("");
   $("#matchCard").innerHTML = `
@@ -957,10 +1004,10 @@ function drawMatches(d) {
       <td class="n">${fmt(m.adr, 1)}</td><td class="n">${pct(m.hs_pct, 0)}</td><td class="n">${signed(m.rating, 2)}</td><td class="n">${fmt(faceitRating(m), 2)}</td><td class="n">${!m.rank ? "–" : m.source === "faceit" && m.rank <= 10 ? `Lvl ${m.rank}` : fmtInt(m.rank)}</td>
       <td>${roomUrl(m, d) ? `<a href="${esc(roomUrl(m, d))}" target="_blank" rel="noopener" title="Open the FACEIT matchroom">FACEIT ↗</a>` : `<span class="muted">–</span>`}</td></tr>`).join("") || `<tr><td colspan="15" class="empty">No matches for this filter.</td></tr>`}
     </tbody></table></div>
-    <div class="pager"><button class="btn small" id="prevP" ${state.page === 0 ? "disabled" : ""}>← Newer</button><span>Page ${state.page + 1} of ${pages}</span><button class="btn small" id="nextP" ${state.page >= pages - 1 ? "disabled" : ""}>Older →</button></div>`;
-  $("#matchCard").querySelectorAll("select").forEach((s) => (s.onchange = () => { state.filters[s.dataset.f] = s.value; state.page = 0; drawMatches(d); }));
-  $("#prevP").onclick = () => { state.page--; drawMatches(d); };
-  $("#nextP").onclick = () => { state.page++; drawMatches(d); };
+    <div class="pager"><button class="btn small" id="prevP" ${state.histPage === 0 ? "disabled" : ""}>← Newer</button><span>Page ${state.histPage + 1} of ${pages}</span><button class="btn small" id="nextP" ${state.histPage >= pages - 1 ? "disabled" : ""}>Older →</button></div>`;
+  $("#matchCard").querySelectorAll("select").forEach((s) => (s.onchange = () => { state.filters[s.dataset.f] = s.value; state.histPage = 0; drawMatches(d); }));
+  $("#prevP").onclick = () => { state.histPage--; drawMatches(d); };
+  $("#nextP").onclick = () => { state.histPage++; drawMatches(d); };
 }
 
 function summarize(list) {
@@ -1039,7 +1086,7 @@ $("#poolSave").onclick = () => {
   Analysis.setPool(picked);
   try { localStorage.setItem(POOL_KEY, JSON.stringify(picked)); } catch {}
   $("#poolSave").textContent = "Saved"; setTimeout(() => ($("#poolSave").textContent = "Save map pool"), 1500);
-  if (state.data && !$("#report").hidden) render(state.data);
+  if (state.data && !$("#report").hidden) renderView();
 };
 $("#exportHistory").onclick = (e) => {
   e.preventDefault();
@@ -1063,7 +1110,7 @@ $("#saveKeys").onclick = async (e) => {
   catch (err) { alert(err.message); return; }
   $("#settings").close(); loadHome();
 };
-let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => state.data && !$("#report").hidden && state.page === "summary" && (drawProgress(state.data), drawPremier(state.data), drawForm(state.data)), 150); });
+let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => state.view && !$("#report").hidden && state.page === "summary" && (drawProgress(state.view), drawPremier(state.view), drawForm(state.view)), 150); });
 
 loadHome();
 const q0 = new URLSearchParams(location.search).get("q");
