@@ -204,7 +204,11 @@ dialog label.poolmap input { width: auto; margin: 0; }
 @media (max-width: 760px) { .role-row { grid-template-columns: 1fr 40px; } .role-row .track { grid-column: 1 / -1; grid-row: 2; } }
 
 /* coaching plan */
-.prio { display: flex; flex-direction: column; }
+.prio { display: flex; flex-direction: column; position: relative; }
+.prio-x { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--text-muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.prio-x:hover, .prio-x:focus-visible { background: var(--surface-2); border-color: var(--border); color: var(--text-primary); }
+.prio .prio-head { padding-right: 30px; }
 .prio-head { display: flex; gap: 12px; align-items: flex-start; }
 .prio-num { flex: none; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-weight: 800; background: var(--accent); color: #fff; }
 .prio-do { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); font-weight: 600; margin-top: 4px; }

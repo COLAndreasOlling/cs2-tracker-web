@@ -352,14 +352,14 @@ const Analysis = (() => {
         action: "On CT, hold off-angles and use a crossfire with a teammate instead of taking the first duel alone." },
       { label: "Opening duels won on T", get: (c) => c.st.t_opening_duel_success_percentage, weak: (v) => v < 45, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 45% weak", sev: (v) => (45 - v) / 10,
         action: "On T, don't dry-peek for the opening kill – take it with a flash, or let your entry player take it and trade." },
+      { label: "Opening rating", get: (c) => c.lt.rating?.opening, weak: (v) => v < -1, good: (v) => v >= 2, fmt: (v) => (v > 0 ? "+" : "") + v.toFixed(1), ref: "≥ +2 good · < −1 weak (Leetify)", sev: (v) => (-1 - v) / 2,
+        action: "You're losing too many first duels – take opening fights only with utility or a teammate ready to trade." },
       { label: "Entry duels won", noLeetify: true, get: (c) => c.p?.entry_success ?? (frac(c.fl.entry_success) != null ? 100 * frac(c.fl.entry_success) : null), weak: (v) => v < 42, good: (v) => v >= 55, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 55% good · < 42% weak (FACEIT)", sev: (v) => (42 - v) / 10,
         action: "Don't dry-peek for the opening kill – enter behind a flash, or let a teammate take first contact and trade it." },
     ] },
-    { id: "rounds", title: "Clutches & round impact", mapKeys: [], checks: [
+    { id: "rounds", title: "Clutches", mapKeys: [], checks: [
       { label: "Clutch rating", get: (c) => c.lt.rating?.clutch, weak: (v) => v < -1, good: (v) => v >= 2, fmt: (v) => (v > 0 ? "+" : "") + v.toFixed(1), ref: "≥ +2 good · < −1 weak (Leetify)", sev: (v) => (-1 - v) / 2,
         action: "In clutches, slow down: use the time, isolate one duel at a time, and play the bomb/sound instead of rushing peeks." },
-      { label: "Opening rating", get: (c) => c.lt.rating?.opening, weak: (v) => v < -1, good: (v) => v >= 2, fmt: (v) => (v > 0 ? "+" : "") + v.toFixed(1), ref: "≥ +2 good · < −1 weak (Leetify)", sev: (v) => (-1 - v) / 2,
-        action: "You're losing too many first duels – take opening fights only with utility or a teammate ready to trade." },
       { label: "1v1 clutches won", noLeetify: true, get: (c) => c.p?.clutch_1v1 ?? (frac(c.fl.clutch_1v1) != null ? 100 * frac(c.fl.clutch_1v1) : null), weak: (v) => v < 45, good: (v) => v >= 60, fmt: (v) => `${Math.round(v)}%`, ref: "≥ 60% good · < 45% weak (FACEIT)", sev: (v) => (45 - v) / 10,
         action: "In clutches, slow down: use the time, isolate one duel at a time, and play the bomb/sound instead of rushing peeks." },
     ] },
@@ -496,7 +496,7 @@ const Analysis = (() => {
     // a short weekly routine from the top priorities' first actions
     const routine = [{ area: "Every session", text: "Warm up 10–15 minutes before your first match: deathmatch at head height, then one prefire run of the map you'll play." },
       ...priorities.flatMap((a) => a.actions.slice(0, 2).map((text) => ({ area: a.title, text })))];
-    return { priorities, more, keep: keep.slice(0, 6), routine, matches: (d.matches || []).length,
+    return { areas, priorities, more, keep: keep.slice(0, 6), routine, matches: (d.matches || []).length,
       source: lt.available ? null : "No Leetify profile – this plan uses FACEIT's match stats (no aim mechanics or trade data)." };
   }
 

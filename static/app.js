@@ -361,7 +361,7 @@ function render(d) {
 
   <section class="page" data-page="coaching" hidden>
     <div class="section-title">Your coaching plan · all maps</div>
-    ${planSection(plan)}
+    <div id="planWrap">${planSection(plan, d.steam64)}</div>
 
     <div class="section-title">Map coaching</div>
     <div class="card" id="coachCard" style="margin-bottom:16px"></div>
@@ -373,7 +373,7 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawMatches(d); drawCoaching(coach);
+  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64);
   setupPages(d);
 }
 
@@ -509,29 +509,55 @@ function roleSection(r) {
 }
 
 /** Overall coaching plan: top priorities with evidence and actions, strengths, and a practice routine. */
-function planSection(plan) {
-  if (!plan.priorities.length)
-    return `<div class="card" style="margin-bottom:16px"><h2>No clear weak spots</h2><p class="muted" style="margin:6px 0 0">Nothing stands out against the reference values across your last ${plan.matches} matches – keep going, and check the map tips below for smaller gains.</p></div>`;
+/* coaching tips the viewer dismissed, per player (this browser only) */
+const DISMISS_KEY = "cs2tracker.dismissed";
+const dismissedFor = (sid) => { try { return (JSON.parse(localStorage.getItem(DISMISS_KEY)) || {})[sid] || []; } catch { return []; } };
+function setDismissed(sid, ids) {
+  try { const all = JSON.parse(localStorage.getItem(DISMISS_KEY)) || {}; all[sid] = ids; localStorage.setItem(DISMISS_KEY, JSON.stringify(all)); } catch {}
+}
+
+/** Overall coaching plan: top priorities (dismissable – the next one moves up), more, routine, strengths. */
+function planSection(plan, sid) {
+  const dismissed = dismissedFor(sid);
+  const visible = plan.areas.filter((a) => !dismissed.includes(a.id));
+  const priorities = visible.slice(0, 3), more = visible.slice(3);
+  const restore = dismissed.length ? `<button class="btn small ghost" id="planRestore" type="button">Show dismissed (${dismissed.length})</button>` : "";
+  if (!priorities.length)
+    return `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>${plan.areas.length ? "All tips dismissed" : "No clear weak spots"}</h2>${restore}</div>
+      <p class="muted" style="margin:6px 0 0">${plan.areas.length ? "You've dismissed every coaching tip for this player." : `Nothing stands out against the reference values across your last ${plan.matches} matches – keep going, and check the map tips below for smaller gains.`}</p></div>`;
   const prio = (a, i) => `
     <div class="card prio">
+      <button class="prio-x" type="button" data-dismiss="${esc(a.id)}" title="Dismiss this tip – the next one moves up" aria-label="Dismiss ${esc(a.title)}">×</button>
       <div class="prio-head"><span class="prio-num">${i + 1}</span><div><h2>${esc(a.title)}</h2>
         ${a.maps.length ? `<div class="sub" style="margin:2px 0 0">Shows up most on: ${esc(a.maps.join(", "))}</div>` : ""}</div></div>
       ${a.evidence.length ? `<div class="statlist" style="margin:10px 0">${a.evidence.map((e) => `<div class="row"><span>${esc(e.label)}<span class="ref muted" style="display:block;font-size:11px">${esc(e.ref)}</span></span><b class="${e.pattern ? "" : "down"}">${esc(e.value)}</b></div>`).join("")}</div>` : ""}
       <div class="prio-do">What to do</div>
       <ul class="todo">${a.actions.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
     </div>`;
+  // a weekly routine from the visible priorities' first actions
+  const routine = [{ area: "Every session", text: "Warm up 10–15 minutes before your first match: deathmatch at head height, then one prefire run of the map you'll play." },
+    ...priorities.flatMap((a) => a.actions.slice(0, 2).map((text) => ({ area: a.title, text })))];
   return `
   ${plan.source ? `<div class="notice">${esc(plan.source)}</div>` : ""}
-  <div class="grid g3 prios">${plan.priorities.map(prio).join("")}</div>
-  ${plan.more.length ? `<div class="card" style="margin-bottom:16px"><h2>Also worth a look</h2><div class="sub">Lower priority – tackle these after the top three</div>
-    <ul class="ins-list">${plan.more.map((a) => `<li><span class="ic" style="background:${css("--warn")}" aria-label="improve">!</span><span>${esc(a.title)}<span class="ref">${esc(a.evidence.map((e) => `${e.label}: ${e.value}`).join(" · ") || `on ${a.maps.join(", ")}`)}</span></span><span></span></li>`).join("")}</ul></div>` : ""}
+  ${restore ? `<div style="display:flex;justify-content:flex-end;margin:-6px 0 8px">${restore}</div>` : ""}
+  <div class="grid g3 prios">${priorities.map(prio).join("")}</div>
+  ${more.length ? `<div class="card" style="margin-bottom:16px"><h2>Also worth a look</h2><div class="sub">Lower priority – these move up when you dismiss a tip above</div>
+    <ul class="ins-list">${more.map((a) => `<li><span class="ic" style="background:${css("--warn")}" aria-label="improve">!</span><span>${esc(a.title)}<span class="ref">${esc(a.evidence.map((e) => `${e.label}: ${e.value}`).join(" · ") || `on ${a.maps.join(", ")}`)}</span></span><span></span></li>`).join("")}</ul></div>` : ""}
   <div class="grid g2">
     <div class="card"><h2>Practice routine</h2><div class="sub">A weekly checklist built from your top priorities</div>
-      <ul class="todo">${plan.routine.map((r) => `<li><span class="muted" style="font-size:11px;display:block">${esc(r.area)}</span>${esc(r.text)}</li>`).join("")}</ul></div>
+      <ul class="todo">${routine.map((r) => `<li><span class="muted" style="font-size:11px;display:block">${esc(r.area)}</span>${esc(r.text)}</li>`).join("")}</ul></div>
     <div class="card"><h2>Keep doing</h2><div class="sub">Already at a good level – don't lose these</div>
       ${plan.keep.length ? `<ul class="ins-list">${plan.keep.map((k) => `<li><span class="ic" style="background:${css("--good")}" aria-label="strength">+</span><span>${esc(k.label)}</span><span class="val">${esc(k.value)}</span></li>`).join("")}</ul>` : `<div class="empty" style="padding:12px 0">No stats clearly above the reference values yet.</div>`}</div>
   </div>
-  <p class="muted" style="font-size:12px;margin:-4px 0 16px">Priorities are ranked by how far a stat is from a rough rule-of-thumb reference (not an official benchmark), and rise when the same problem appears on several maps.</p>`;
+  <p class="muted" style="font-size:12px;margin:-4px 0 16px">Priorities are ranked by how far a stat is from a rough rule-of-thumb reference (not an official benchmark), and rise when the same problem appears on several maps. Dismissed tips are remembered for this player in this browser.</p>`;
+}
+
+function bindPlan(plan, sid) {
+  const wrap = $("#planWrap");
+  if (!wrap) return;
+  const redraw = () => { wrap.innerHTML = planSection(plan, sid); bindPlan(plan, sid); };
+  wrap.querySelectorAll("[data-dismiss]").forEach((b) => (b.onclick = () => { setDismissed(sid, [...dismissedFor(sid), b.dataset.dismiss]); redraw(); }));
+  const r = $("#planRestore"); if (r) r.onclick = () => { setDismissed(sid, []); redraw(); };
 }
 
 /* ----------------------------------------------------------- map plan --- */
