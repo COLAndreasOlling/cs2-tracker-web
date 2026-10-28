@@ -1167,7 +1167,7 @@ def demo_history():
 
 # ----------------------------------------------------------------- views ---
 
-def lookup(q):
+def lookup(q, record=True):
     cfg = load_config()
     if q.strip().lower() in ("demo", "demo-faceit"):
         fr, lr = demo_raw()
@@ -1188,7 +1188,7 @@ def lookup(q):
     if not fc.get("available") and not lt.get("available"):
         raise ApiError(404, f"No data. FACEIT: {fc.get('reason')}  Leetify: {lt.get('reason')}")
     s = build_summary(fc, lt, steam64)
-    s["history"] = record_snapshot(s)["snapshots"]
+    s["history"] = record_snapshot(s)["snapshots"] if record else load_snapshots(steam64)["snapshots"]
     return s
 
 
@@ -1231,7 +1231,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             if u.path == "/api/player":
-                return self.send_json(lookup(qs.get("q", [""])[0]))
+                return self.send_json(lookup(qs.get("q", [""])[0], record=qs.get("snap", ["1"])[0] != "0"))
             if u.path == "/api/tracked":
                 return self.send_json(tracked_players())
             if u.path == "/api/config":

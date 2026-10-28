@@ -795,7 +795,7 @@ const Engine = (() => {
   }
 
   /* -------------------------------------------------------------- views --- */
-  async function lookup(q) {
+  async function lookup(q, record = true) {
     const cfg = loadConfig();
     if (["demo", "demo-faceit"].includes(q.trim().toLowerCase())) {
       let [fr, lrw] = demoRaw();
@@ -811,7 +811,7 @@ const Engine = (() => {
     const lt = normalizeLeetify(await fetchLeetify(steam64, cfg), steam64);
     if (!fc.available && !lt.available) throw new ApiError(404, `No data. FACEIT: ${fc.reason}  Leetify: ${lt.reason}`);
     const s = buildSummary(fc, lt, steam64);
-    s.history = recordSnapshot(s).snapshots;
+    s.history = record ? recordSnapshot(s).snapshots : allSnapshots()[steam64]?.snapshots || [];
     return s;
   }
 
@@ -828,7 +828,7 @@ const Engine = (() => {
     const u = new URL(path, "http://x/");
     const body = opts.body ? JSON.parse(opts.body) : {};
     switch (`${opts.method || "GET"} ${u.pathname}`) {
-      case "GET /api/player": return lookup(u.searchParams.get("q") || "");
+      case "GET /api/player": return lookup(u.searchParams.get("q") || "", u.searchParams.get("snap") !== "0");
       case "GET /api/tracked": return trackedPlayers();
       case "GET /api/config": return configView();
       case "POST /api/config": {

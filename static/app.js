@@ -220,7 +220,7 @@ function renderView() {
 async function lookup(q) {
   if (!q) return;
   $("#q").value = q.startsWith("demo") ? "" : q; // demo data is only for testing
-  $("#welcome").hidden = true; $("#report").hidden = true; $("#error").hidden = true; $("#loading").hidden = false;
+  $("#welcome").hidden = true; $("#report").hidden = true; $("#error").hidden = true; $("#team").hidden = true; $("#loading").hidden = false;
   const tab = new URLSearchParams(location.search).get("tab");
   const src = new URLSearchParams(location.search).get("src");
   history.replaceState(null, "", "?q=" + encodeURIComponent(q) + (tab ? "&tab=" + encodeURIComponent(tab) : "") + (src ? "&src=" + encodeURIComponent(src) : ""));
@@ -562,6 +562,90 @@ function bindPlatformBar() {
   }));
 }
 
+/* ----------------------------------------------------------------- team --- */
+function showOnly(id) { for (const x of ["welcome", "report", "team", "error"]) $(`#${x}`).hidden = x !== id; }
+
+/** The 5-stack builder; `names` prefills the fields, `auto` runs the analysis straight away. */
+function showTeam(names = [], auto = false) {
+  showOnly("team");
+  const vals = [...names, "", "", "", "", ""].slice(0, 5);
+  $("#team").innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <h2>Team view</h2>
+      <div class="sub">Up to five players – FACEIT nickname, Steam64 ID or profile URL. Looking teammates up here doesn't add them to your progress history.</div>
+      <form id="teamForm" class="teamform" autocomplete="off">
+        ${vals.map((v, i) => `<input name="p${i}" value="${esc(v)}" placeholder="Player ${i + 1}" aria-label="Player ${i + 1}">`).join("")}
+        <button class="btn primary" type="submit">Analyse team</button>
+      </form>
+    </div>
+    <div id="teamOut"></div>`;
+  $("#teamForm").onsubmit = (e) => { e.preventDefault(); analyzeTeam([...e.target.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean)); };
+  if (auto && vals.filter(Boolean).length >= 2) analyzeTeam(vals.filter(Boolean));
+}
+
+async function analyzeTeam(names) {
+  const out = $("#teamOut");
+  if (names.length < 2) { out.innerHTML = `<div class="error">Add at least two players.</div>`; return; }
+  const u = new URL(location.href); u.search = "?team=" + names.map(encodeURIComponent).join(","); history.replaceState(null, "", u);
+  const players = [], failed = [];
+  for (let i = 0; i < names.length; i++) { // one at a time – kinder to the APIs' rate limits
+    out.innerHTML = `<div class="loading"><div class="spinner"></div><span>Loading ${i + 1} of ${names.length}: ${esc(names[i])}…</span></div>`;
+    try { players.push({ query: names[i], d: viewOf(await api("/api/player?snap=0&q=" + encodeURIComponent(names[i]))) }); }
+    catch (e) { failed.push(`${names[i]}: ${e.message}`); }
+  }
+  if (players.length < 2) { out.innerHTML = `<div class="error">Couldn't load enough players.<br>${failed.map(esc).join("<br>")}</div>`; return; }
+  out.innerHTML = renderTeam(Analysis.team(players), failed);
+}
+
+function renderTeam(t, failed) {
+  const pc = (v) => (v == null ? "–" : `${Math.round(v)}%`);
+  const formBadge = { hot: ["▲ in form", "up"], cold: ["▼ out of form", "down"], steady: ["steady", "muted"], unknown: ["–", "muted"] };
+  const list = (items, good) => items.length
+    ? `<ul class="ins-list">${items.map((i) => `<li><span class="ic" style="background:${css(good ? "--good" : "--bad")}" aria-label="${good ? "strength" : "weakness"}">${good ? "+" : "−"}</span>
+        <span><b>${esc(i.title)}</b><span class="ref" style="font-size:12px;color:var(--text-secondary)">${esc(i.detail)}</span>${i.action ? `<span class="ref">→ ${esc(i.action)}</span>` : ""}</span><span></span></li>`).join("")}</ul>`
+    : `<div class="empty" style="padding:12px 0">Nothing stands out.</div>`;
+  const roster = t.roster.map((p) => `<div class="card teamcard">
+      <a href="?q=${encodeURIComponent(p.d.faceit?.available ? p.d.faceit.nickname : p.d.steam64)}"><b>${esc(p.name)}</b></a>
+      <div class="muted" style="font-size:12px">${p.level ? `Lvl ${fmtInt(p.level)}` : ""}${p.elo ? ` · ${fmtInt(p.elo)} ELO` : ""}${p.score != null ? ` · score ${p.score}` : ""}</div>
+      <div class="role-line" style="margin-top:8px"><span class="role-badge">${esc(p.role.available ? p.role.primary.name : "Role unknown")}</span></div>
+      <div style="font-size:12px;margin-top:8px">${p.impact ? `Kills: <b>${esc(p.impact.name)}</b>` : ""}</div>
+      <div style="font-size:12px" class="${formBadge[p.form][1]}">${formBadge[p.form][0]}${p.formDiff != null ? ` (${p.formDiff > 0 ? "+" : ""}${p.formDiff.toFixed(2)} last 10)` : ""}</div>
+    </div>`).join("");
+  const roles = `<table><thead><tr><th>Slot</th><th>Suggested player</th><th class="n">Fit</th></tr></thead><tbody>
+    ${t.assignment.map((a) => `<tr><td>${esc(a.label)}</td><td><b>${esc(a.player)}</b></td><td class="n ${a.fit == null ? "muted" : a.fit >= 55 ? "up" : a.fit < 40 ? "down" : ""}">${a.fit == null ? "n/a" : a.fit}</td></tr>`).join("")}
+    </tbody></table>`;
+  const cell = (c) => {
+    if (!c.n) return `<td class="n muted">–</td>`;
+    const diff = c.adj - 50, a = Math.min(45, Math.abs(diff) * 3);
+    const bg = Math.abs(diff) < 2 ? "transparent" : `color-mix(in srgb, var(${diff > 0 ? "--div-pos" : "--div-neg"}) ${a}%, transparent)`;
+    return `<td class="n heat" style="background:${bg}" title="${c.n} games (${c.source}) · ${pc(c.wr)} won">${pc(c.wr)}<span class="nsub">${c.n}</span></td>`;
+  };
+  const mapTable = `<div class="table-wrap"><table class="heattable"><thead><tr><th>Map</th>${t.roster.map((p) => `<th class="n">${esc(p.name)}</th>`).join("")}<th class="n" title="Average win rate, pulled towards 50% when a player has few games">Stack</th><th></th><th>Weakest</th></tr></thead><tbody>
+    ${[...t.maps].sort((a, b) => b.score - a.score).map((m) => `<tr><td><b>${esc(m.map)}</b></td>${m.cells.map(cell).join("")}
+      <td class="n"><b>${pc(m.score)}</b></td>
+      <td>${t.picks.includes(m.map) ? `<span class="badge win">Pick</span>` : t.bans.includes(m.map) ? `<span class="badge loss">Ban</span>` : ""}</td>
+      <td class="muted" style="font-size:12px">${m.weakest && m.unplayed < t.roster.length ? esc(m.weakest) : "–"}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  const tg = t.together;
+  const together = tg.n ? `<div class="statlist"><div class="row"><span>Recent FACEIT matches with 3+ of you together</span><b>${tg.n} · ${pc(tg.winrate)} won</b></div>
+      ${tg.maps.map((x) => `<div class="row"><span>${esc(x.map)}</span><b>${pc(x.winrate)} <span class="muted" style="font-weight:400">of ${x.n}</span></b></div>`).join("")}</div>`
+    : `<div class="empty">No recent FACEIT matches with at least three of you in the same team.</div>`;
+  return `
+    ${failed.length ? `<div class="notice">Couldn't load: ${failed.map(esc).join("; ")}</div>` : ""}
+    <div class="card" style="margin-bottom:16px"><h2>Your stack at a glance</h2>
+      <div class="grid g2" style="margin:8px 0 0"><div><div class="prio-do" style="margin-bottom:6px">Strengths</div>${list(t.insights.strengths, true)}</div>
+      <div><div class="prio-do" style="margin-bottom:6px">Weaknesses &amp; what to do</div>${list(t.insights.weaknesses, false)}</div></div></div>
+    <div class="section-title">Roster</div>
+    <div class="teamgrid">${roster}</div>
+    <div class="grid g2">
+      <div class="card"><h2>Suggested roles</h2><div class="sub">Each slot goes to the free player who fits it best on the numbers (AWP first). Fit 0–100; under 40 means nobody is a natural fit.</div>${roles}</div>
+      <div class="card"><h2>Results together</h2><div class="sub">Matches where at least three of you were in the same team</div>${together}</div>
+    </div>
+    <div class="card" style="margin-bottom:16px"><h2>Map pool for the stack</h2>
+      <div class="sub">Each player's win % per map (FACEIT lifetime where available; small number = games). "Stack" averages them, pulling small samples towards 50%. Picks need at least four of you with 5+ games.</div>${mapTable}</div>
+    <p class="muted" style="font-size:12px">Roles, form and impact use each player's recent matches${state.platform !== "all" ? ` on ${esc(platformDef(state.platform)[1])}` : ""}. Team results are only as good as the data each player has – players without Leetify have no trade or aim data.</p>`;
+}
+
 /* ------------------------------------------------- pre-match team mentality --- */
 /** Pre-match guidance for a 5-stack of friends, with the player's own patterns where the data shows them. */
 function prematchSection(d) {
@@ -801,6 +885,7 @@ function drawMapPlan(d) {
 /* ------------------------------------------------- sessions & teammates --- */
 function drawLobbies(d) {
   const el = $("#lobbyCard"), L = Analysis.lobbies(d);
+  setTimeout(() => { const b = $("#stackBtn"); if (b) b.onclick = () => showTeam([d.faceit?.available ? d.faceit.nickname : d.steam64, ...L.duos.slice(0, 4).map((x) => x.nick)], true); });
   if (!L.available) { el.innerHTML = `<div class="card empty">${esc(L.reason)}</div>`; return; }
   const pc = (v) => (v == null ? "–" : `${Math.round(v)}%`), f2 = (v) => (v == null ? "–" : v.toFixed(2));
   const avg = L.overall;
@@ -852,7 +937,7 @@ function drawLobbies(d) {
         <div class="statlist" style="margin-top:10px"><div class="row"><span>Next match after a win / after a loss</span><b>${f2(L.tilt.afterWin.rating)} / ${f2(L.tilt.afterLoss.rating)} <span class="muted" style="font-weight:400">rating</span></b></div></div></div>
       <div class="card"><h2>Time of day</h2><div class="sub">Your local time when the match started</div>${table(L.timeOfDay, "Time")}</div>
     </div>
-    <div class="card" style="margin-bottom:16px"><h2>Duos</h2><div class="sub">Teammates in 5+ of your recent FACEIT matches – your results with them vs without them</div>${duoTable}</div>`;
+    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Duos</h2>${L.duos.length ? `<button class="btn small" id="stackBtn" type="button">Analyse my usual stack</button>` : ""}</div><div class="sub">Teammates in 5+ of your recent FACEIT matches – your results with them vs without them</div>${duoTable}</div>`;
 }
 
 const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",
@@ -1080,7 +1165,11 @@ function summarize(list) {
 /* -------------------------------------------------------------- wiring --- */
 $("#search").onsubmit = (e) => { e.preventDefault(); lookup($("#q").value.trim()); };
 $(".brand").style.cursor = "pointer";
-$(".brand").onclick = () => { history.replaceState(null, "", location.pathname); $("#report").hidden = true; $("#error").hidden = true; $("#welcome").hidden = false; loadHome(); };
+$(".brand").onclick = () => { history.replaceState(null, "", location.pathname); $("#report").hidden = true; $("#error").hidden = true; $("#team").hidden = true; $("#welcome").hidden = false; loadHome(); };
+$("#teamBtn").onclick = () => {
+  const d = state.view && !$("#report").hidden ? state.view : null;
+  showTeam(d ? [d.faceit?.available ? d.faceit.nickname : d.steam64] : []);
+};
 $("#settingsBtn").onclick = async () => {
   $("#faceitKey").value = ""; $("#leetifyKey").value = "";
   const cfg = await api("/api/config").catch(() => ({}));
@@ -1170,5 +1259,7 @@ $("#saveKeys").onclick = async (e) => {
 let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => state.view && !$("#report").hidden && state.page === "summary" && (drawProgress(state.view), drawPremier(state.view), drawForm(state.view)), 150); });
 
 loadHome();
+const team0 = new URLSearchParams(location.search).get("team");
+if (team0) showTeam(team0.split(",").map((x) => decodeURIComponent(x)).filter(Boolean), true);
 const q0 = new URLSearchParams(location.search).get("q");
 if (q0) lookup(q0);

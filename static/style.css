@@ -170,6 +170,13 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .ins-list .ref { display: block; font-size: 11px; color: var(--text-muted); }
 .ins-list .val { font-weight: 700; white-space: nowrap; }
 
+/* team view */
+.teamform { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) auto; gap: 8px; margin-top: 10px; }
+.teamform input { min-width: 0; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary); font: inherit; }
+.teamgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.teamcard { padding: 14px; }
+@media (max-width: 760px) { .teamform { grid-template-columns: minmax(0, 1fr); } }
+
 /* map plan */
 .card.flat { box-shadow: none; background: var(--surface-2); }
 .heattable td.heat { font-weight: 600; }

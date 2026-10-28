@@ -1024,6 +1024,104 @@ const Analysis = (() => {
     return out;
   }
 
-  return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool, mapPlan, lobbies, killImpact,
+  /* ---------------------------------------------------------------- team --- */
+  // A 5-stack: roster (role, form, impact), a suggested role split, the stack's map pool with
+  // shrunk win rates (small samples pull towards 50%), and the matches they actually played together.
+  const TEAM_ROLES = [["awper", "AWPer"], ["entry", "Entry"], ["support", "Support"], ["lurker", "Lurker / anchor"], ["rifler", "Second rifle"]];
+  const shrunk = (wins, n, prior = 10) => (100 * (wins + prior * 0.5)) / (n + prior); // win % pulled towards 50% when n is small
+
+  function team(players) {
+    const roster = players.map(({ d }) => {
+      const r = role(d), k = killImpact(d);
+      const fr = (d.matches || []).map(faceitRating).filter((v) => v != null);
+      const lr = (d.matches || []).map((m) => m.rating).filter((v) => v != null);
+      const recent = fr.length >= 15 ? [mean(fr.slice(0, 10)), mean(fr.slice(10))] : lr.length >= 15 ? [mean(lr.slice(0, 10)), mean(lr.slice(10))] : null;
+      const formDiff = recent ? recent[0] - recent[1] : null, formUnit = fr.length >= 15 ? "faceit" : "leetify";
+      const form = formDiff == null ? "unknown" : formDiff >= (formUnit === "faceit" ? 0.08 : 1) ? "hot" : formDiff <= -(formUnit === "faceit" ? 0.08 : 1) ? "cold" : "steady";
+      const scores = Object.fromEntries((r.ranked || []).map((x) => [x.id, x.score]));
+      if (scores.anchor != null) scores.lurker = Math.max(scores.lurker ?? 0, scores.anchor); // anchors and lurkers fill the same slot
+      return { d, name: d.identity?.name, role: r, scores, impact: k.available ? k.verdict : null, form, formDiff, formUnit, score: d.score,
+        level: d.faceit?.available ? d.faceit.level : d.leetify?.ranks?.faceit, elo: d.faceit?.available ? d.faceit.elo : d.leetify?.ranks?.faceit_elo };
+    });
+
+    // role split: give each slot to the free player who fits it best, AWP first (the most specialised)
+    const free = new Set(roster.map((_, i) => i)), assignment = [];
+    for (const [id, label] of TEAM_ROLES) {
+      let best = null;
+      for (const i of free) { const sc = roster[i].scores[id] ?? -1; if (!best || sc > best.sc) best = { i, sc }; }
+      if (!best) break;
+      free.delete(best.i);
+      assignment.push({ role: id, label, player: roster[best.i].name, fit: best.sc < 0 ? null : best.sc });
+    }
+
+    // map pool: every player's results per Active Duty map (FACEIT lifetime when available, else recent matches)
+    const maps = ACTIVE_DUTY.map((map) => {
+      const cells = roster.map((p) => {
+        const recent = (p.d.matches || []).filter((m) => norm(m.map) === norm(map));
+        const life = p.d.faceit?.available ? (p.d.faceit.maps || {})[Object.keys(p.d.faceit.maps || {}).find((k) => norm(k) === norm(map))] : null;
+        const n = life?.matches ?? recent.length;
+        const wr = life?.winrate ?? (recent.length ? (100 * recent.filter((m) => m.outcome === "win").length) / recent.length : null);
+        const rating = mean(recent.map(faceitRating)) ?? null;
+        return { n: n || 0, wr, adj: wr == null ? 50 : shrunk((wr / 100) * n, n), rating, source: life ? "FACEIT lifetime" : "recent matches" };
+      });
+      const played = cells.filter((c) => c.n > 0);
+      const score = mean(cells.map((c) => c.adj));
+      const weakest = played.length ? roster[cells.indexOf(played.reduce((a, b) => (b.adj < a.adj ? b : a)))].name : null;
+      return { map, cells, score, comfort: Math.min(...cells.map((c) => c.n)), unplayed: cells.filter((c) => c.n < 5).length, weakest };
+    });
+    const byScore = [...maps].sort((a, b) => b.score - a.score);
+    const picks = byScore.filter((m) => m.unplayed <= 1).slice(0, 2).map((m) => m.map);
+    const bans = [...byScore].reverse().slice(0, 2).map((m) => m.map);
+
+    // matches the stack played together: 3+ of the players in the same match
+    const byId = new Map();
+    roster.forEach((p, pi) => {
+      for (const m of p.d.matches || []) {
+        const id = m.faceit_id || (m.source === "faceit" ? m.id : null);
+        if (!id) continue;
+        if (!byId.has(id)) byId.set(id, { m, who: new Set() });
+        byId.get(id).who.add(pi);
+      }
+    });
+    const together = [...byId.values()].filter((x) => x.who.size >= Math.min(3, roster.length)).map((x) => x.m);
+    const tg = (ms) => { const dd = ms.filter((m) => m.outcome === "win" || m.outcome === "loss"); return { n: ms.length, wins: dd.filter((m) => m.outcome === "win").length, winrate: dd.length ? (100 * dd.filter((m) => m.outcome === "win").length) / dd.length : null }; };
+    const togetherMaps = ACTIVE_DUTY.map((map) => ({ map, ...tg(together.filter((m) => norm(m.map) === norm(map))) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n);
+
+    // insights
+    const S = [], W = [];
+    const add = (arr, title, detail, action) => arr.push({ title, detail, action: action || null });
+    const awp = assignment.find((a) => a.role === "awper");
+    const awpers = roster.filter((p) => p.role.primary?.id === "awper");
+    if (roster.every((p) => p.scores.awper == null))
+      add(W, "AWP usage unknown", "AWP usage comes from FACEIT's sniper-kill stats, which aren't available for these players.", "Sign in (FACEIT key) to see who your AWPer is – or agree on one before you queue.");
+    else if (awpers.length > 1) add(W, "Two AWPers", `${awpers.map((p) => p.name).join(" and ")} both play mainly AWP.`, "Agree who takes the AWP on which map or side – sharing it round by round costs economy and positions.");
+    else if (!awp || awp.fit == null || awp.fit < 40) add(W, "No natural AWPer", "Nobody takes a large share of kills with the AWP.", `Decide who buys the AWP – ${awp?.player || "your best aimer"} fits best on the numbers – and give them a few games to settle into it.`);
+    else add(S, "Clear AWPer", `${awp.player} (AWP fit ${awp.fit}).`);
+    const entries = roster.filter((p) => ["entry"].includes(p.role.primary?.id));
+    if (entries.length >= 2) add(W, `${entries.length} entry fraggers`, `${entries.map((p) => p.name).join(", ")} all take many first duels.`, "Decide who enters on each site; the other plays second in and trades – two players taking first contact means nobody trades.");
+    const ent = assignment.find((a) => a.role === "entry");
+    if (ent && ent.fit != null && ent.fit < 40) add(W, "No natural entry", "Nobody takes many first duels.", `Give the entry role to ${ent.player} and back it with flashes – rounds stall without someone going first.`);
+    const sup = assignment.find((a) => a.role === "support");
+    if (sup && sup.fit != null && sup.fit >= 55) add(S, "A real support player", `${sup.player} uses a lot of utility for the team.`);
+    const hot = roster.filter((p) => p.form === "hot"), cold = roster.filter((p) => p.form === "cold");
+    if (hot.length) add(S, `In form: ${hot.map((p) => p.name).join(", ")}`, "Their last 10 matches are clearly above their average.", "Play through them: give them the impactful positions this session.");
+    if (cold.length) add(W, `Out of form: ${cold.map((p) => p.name).join(", ")}`, "Their last 10 matches are clearly below their average.", "Give them a simpler, supportive role for now – and no blame. Form comes back.");
+    const empty = roster.filter((p) => p.impact && ["empty", "oneanddone"].includes(p.impact.id));
+    if (empty.length) add(W, "Kills that don't convert", `${empty.map((p) => `${p.name} (${p.impact.name.toLowerCase()})`).join(", ")}.`, "Play these players closer to a teammate, so their picks get traded forward into won rounds.");
+    if (together.length >= 5) {
+      const t = tg(together);
+      add(t.winrate >= 50 ? S : W, `Together: ${Math.round(t.winrate)}% won`, `${t.n} recent FACEIT matches with at least 3 of you in the same team.`,
+        t.winrate >= 50 ? null : "Your stack games go worse than you'd expect – agree on roles and one caller before the next session.");
+      const best = togetherMaps.filter((x) => x.n >= 4).sort((a, b) => b.winrate - a.winrate)[0];
+      if (best && best.winrate >= 60) add(S, `Stack's best map together: ${best.map}`, `${Math.round(best.winrate)}% won in ${best.n} games together.`);
+    }
+    if (picks.length) add(S, `Suggested picks: ${picks.join(", ")}`, "Highest combined win rate where at least four of you have played enough.");
+    const thin = maps.filter((m) => m.unplayed >= 3).map((m) => m.map);
+    if (thin.length) add(W, `Little experience as a group on ${thin.join(", ")}`, "Three or more of you have fewer than 5 games there.", "Ban these early, or practise them together before playing them in important matches.");
+
+    return { roster, assignment, maps, picks, bans, together: { ...tg(together), maps: togetherMaps }, insights: { strengths: S, weaknesses: W } };
+  }
+
+  return { integrity, mapCoaching, coachingPlan, role, faceitRating, setPool, mapPlan, lobbies, killImpact, team,
     getPool: () => [...ACTIVE_DUTY], DEFAULT_POOL, KNOWN_MAPS };
 })();
