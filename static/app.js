@@ -565,11 +565,35 @@ function bindPlatformBar() {
 /* ----------------------------------------------------------------- team --- */
 function showOnly(id) { for (const x of ["welcome", "report", "team", "error"]) $(`#${x}`).hidden = x !== id; }
 
-/** The 5-stack builder; `names` prefills the fields, `auto` runs the analysis straight away. */
-function showTeam(names = [], auto = false) {
+const meOf = (d) => (d.faceit?.available ? d.faceit.nickname : d.steam64);
+
+/** Clickable list of the groups of teammates this player keeps queuing with (from Analysis.lobbies). */
+function stacksHtml(d, L, active = []) {
+  if (!L.available) return `<div class="empty">${esc(L.reason)}</div>`;
+  if (!L.stacks?.length) return `<div class="empty">No group of teammates shows up together in 3+ of the recent FACEIT matches.</div>`;
+  const pc = (v) => (v == null ? "–" : `${Math.round(v)}%`), f2 = (v) => (v == null ? "–" : v.toFixed(2));
+  const on = new Set(active.map((x) => x.toLowerCase()));
+  return `<div class="stacklist">${L.stacks.map((s, i) => {
+    const sel = s.players.every((p) => on.has(p.nick.toLowerCase())) && on.size === s.players.length + 1;
+    const wr = s.winrate == null ? "" : s.winrate >= 55 ? "up" : s.winrate < 45 ? "down" : "";
+    return `<button type="button" class="stackrow${sel ? " on" : ""}" data-stack="${i}" title="Analyse this stack">
+      <span class="stack-names"><b>${esc(meOf(d))}</b> + ${s.players.map((p) => esc(p.nick)).join(", ")}</span>
+      <span class="stack-meta"><span class="role-badge">${s.size}-stack</span> ${s.n} games · <b class="${wr}">${pc(s.winrate)} won</b> · your rating ${f2(s.rating)}${s.maps.length ? ` · ${s.maps.map((m) => `${esc(m.map)} ${m.n}`).join(", ")}` : ""}${s.last ? ` · last ${dateShort(s.last)}` : ""}</span>
+    </button>`; }).join("")}</div>`;
+}
+function bindStacks(root, d, L) {
+  root.querySelectorAll("[data-stack]").forEach((b) => (b.onclick = () => showTeam([meOf(d), ...L.stacks[+b.dataset.stack].players.map((p) => p.nick)], true, d)));
+}
+
+/** The 5-stack builder; `names` prefills the fields, `auto` runs the analysis straight away, `d` (a looked-up player) lists their usual stacks. */
+function showTeam(names = [], auto = false, d = null) {
   showOnly("team");
   const vals = [...names, "", "", "", "", ""].slice(0, 5);
+  const L = d ? Analysis.lobbies(d) : null;
   $("#team").innerHTML = `
+    ${L ? `<div class="card" style="margin-bottom:16px" id="stackCard"><h2>${esc(meOf(d))}'s usual stacks</h2>
+      <div class="sub">Groups of teammates from the recent FACEIT matches – pick the one you're about to play with. Win % and rating are ${esc(meOf(d))}'s results in those games.</div>
+      ${stacksHtml(d, L, names)}</div>` : ""}
     <div class="card" style="margin-bottom:16px">
       <h2>Team view</h2>
       <div class="sub">Up to five players – FACEIT nickname, Steam64 ID or profile URL. Looking teammates up here doesn't add them to your progress history.</div>
@@ -579,6 +603,7 @@ function showTeam(names = [], auto = false) {
       </form>
     </div>
     <div id="teamOut"></div>`;
+  if (L) bindStacks($("#stackCard"), d, L);
   $("#teamForm").onsubmit = (e) => { e.preventDefault(); analyzeTeam([...e.target.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean)); };
   if (auto && vals.filter(Boolean).length >= 2) analyzeTeam(vals.filter(Boolean));
 }
@@ -885,7 +910,6 @@ function drawMapPlan(d) {
 /* ------------------------------------------------- sessions & teammates --- */
 function drawLobbies(d) {
   const el = $("#lobbyCard"), L = Analysis.lobbies(d);
-  setTimeout(() => { const b = $("#stackBtn"); if (b) b.onclick = () => showTeam([d.faceit?.available ? d.faceit.nickname : d.steam64, ...L.duos.slice(0, 4).map((x) => x.nick)], true); });
   if (!L.available) { el.innerHTML = `<div class="card empty">${esc(L.reason)}</div>`; return; }
   const pc = (v) => (v == null ? "–" : `${Math.round(v)}%`), f2 = (v) => (v == null ? "–" : v.toFixed(2));
   const avg = L.overall;
@@ -937,7 +961,9 @@ function drawLobbies(d) {
         <div class="statlist" style="margin-top:10px"><div class="row"><span>Next match after a win / after a loss</span><b>${f2(L.tilt.afterWin.rating)} / ${f2(L.tilt.afterLoss.rating)} <span class="muted" style="font-weight:400">rating</span></b></div></div></div>
       <div class="card"><h2>Time of day</h2><div class="sub">Your local time when the match started</div>${table(L.timeOfDay, "Time")}</div>
     </div>
-    <div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Duos</h2>${L.duos.length ? `<button class="btn small" id="stackBtn" type="button">Analyse my usual stack</button>` : ""}</div><div class="sub">Teammates in 5+ of your recent FACEIT matches – your results with them vs without them</div>${duoTable}</div>`;
+    <div class="card" style="margin-bottom:16px" id="stackCard"><h2>Usual stacks</h2><div class="sub">Groups of teammates that keep showing up together – click one to open it in the Team view</div>${stacksHtml(d, L)}</div>
+    <div class="card" style="margin-bottom:16px"><h2>Duos</h2><div class="sub">Teammates in 5+ of your recent FACEIT matches – your results with them vs without them</div>${duoTable}</div>`;
+  bindStacks(el, d, L);
 }
 
 const COACH_LABELS = { util_pr: "utility usage", flash_eff: "flash effectiveness", flash_team: "team flashes", util_death: "using utility before dying",
@@ -1168,7 +1194,7 @@ $(".brand").style.cursor = "pointer";
 $(".brand").onclick = () => { history.replaceState(null, "", location.pathname); $("#report").hidden = true; $("#error").hidden = true; $("#team").hidden = true; $("#welcome").hidden = false; loadHome(); };
 $("#teamBtn").onclick = () => {
   const d = state.view && !$("#report").hidden ? state.view : null;
-  showTeam(d ? [d.faceit?.available ? d.faceit.nickname : d.steam64] : []);
+  showTeam(d ? [meOf(d)] : [], false, d);
 };
 $("#settingsBtn").onclick = async () => {
   $("#faceitKey").value = ""; $("#leetifyKey").value = "";

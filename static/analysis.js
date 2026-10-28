@@ -893,6 +893,29 @@ const Analysis = (() => {
         add(S, dw / 15, `You win more with ${duo.nick}`, detail + " Your own numbers dip, so you're likely playing the enabling role – that's fine if it wins games.");
     }
 
+    // 3b. stacks: groups of 2+ teammates that keep showing up together (random teammates rarely repeat)
+    const combos = {};
+    for (const m of withCtx) {
+      const tm = [...(m.ctx.teammates || [])].sort((a, b) => a.id.localeCompare(b.id));
+      for (let mask = 1; mask < 1 << tm.length; mask++) {
+        const sel = tm.filter((_, i) => mask & (1 << i));
+        if (sel.length < 2) continue;
+        (combos[sel.map((t) => t.id).join(",")] ||= { players: sel, ms: [] }).ms.push(m);
+      }
+    }
+    const recurring = Object.values(combos).filter((c) => c.ms.length >= (c.players.length === 4 ? 2 : 3));
+    // drop a group when a bigger one containing it covers most of its matches – that's the same stack
+    const covers = (big, small) => big.players.length > small.players.length && small.players.every((p) => big.players.some((q) => q.id === p.id));
+    out.stacks = recurring.filter((c) => !recurring.some((b) => covers(b, c) && b.ms.length >= 0.75 * c.ms.length))
+      .sort((a, b) => b.ms.length - a.ms.length || b.players.length - a.players.length).slice(0, 8)
+      .map((c) => {
+        const maps = {};
+        for (const m of c.ms) if (m.map) (maps[m.map] ||= []).push(m);
+        const topMaps = Object.entries(maps).map(([map, ms]) => ({ map, ...group(ms) })).sort((a, b) => b.n - a.n).slice(0, 3);
+        const last = c.ms.map((m) => m.ctx.started).filter(Boolean).sort().pop() || null;
+        return { players: c.players, size: c.players.length + 1, ...group(c.ms), maps: topMaps, last };
+      });
+
     // 4. sessions: a new session starts after a 90-minute break
     const chrono = withCtx.filter((m) => m.ctx.started).sort((a, b) => a.ctx.started.localeCompare(b.ctx.started));
     let idx = 0, prevEnd = null;
