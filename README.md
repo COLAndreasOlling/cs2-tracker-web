@@ -10,7 +10,7 @@ Needs Python 3.9+. No packages to install.
 python server.py
 ```
 
-Open http://127.0.0.1:8765, or double-click `start.bat` on Windows. Click **Demo** to see the app with synthetic data.
+Open http://127.0.0.1:8765, or double-click `start.bat` on Windows. (For development: `?q=demo` and `?q=demo-faceit` load synthetic test data.)
 
 ## Put it online
 

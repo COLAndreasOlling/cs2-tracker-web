@@ -219,7 +219,7 @@ function renderView() {
 
 async function lookup(q) {
   if (!q) return;
-  $("#q").value = q === "demo" ? "" : q;
+  $("#q").value = q.startsWith("demo") ? "" : q; // demo data is only for testing
   $("#welcome").hidden = true; $("#report").hidden = true; $("#error").hidden = true; $("#loading").hidden = false;
   const tab = new URLSearchParams(location.search).get("tab");
   const src = new URLSearchParams(location.search).get("src");
@@ -389,6 +389,9 @@ function render(d) {
     <div class="section-title">Your coaching plan · all maps</div>
     <div id="planWrap">${planSection(plan, d.steam64)}</div>
 
+    <div class="section-title">Pre-match · team mentality</div>
+    ${prematchSection(d)}
+
     <div class="section-title">Map coaching</div>
     <div class="card" id="coachCard" style="margin-bottom:16px"></div>
   </section>`;
@@ -557,6 +560,60 @@ function bindPlatformBar() {
     history.replaceState(null, "", u);
     renderView();
   }));
+}
+
+/* ------------------------------------------------- pre-match team mentality --- */
+/** Pre-match guidance for a 5-stack of friends, with the player's own patterns where the data shows them. */
+function prematchSection(d) {
+  const L = Analysis.lobbies(d), mp = Analysis.mapPlan(d), notes = [];
+  const pc = (v) => `${Math.round(v)}%`;
+  if (L.available) {
+    if (L.fatigue) notes.push(`Your rating drops from ${L.fatigue.early.rating.toFixed(2)} in the first two matches of a session to ${L.fatigue.late.rating.toFixed(2)} from the 4th – agree on a 3-match session.`);
+    const tw = L.tilt?.afterWin, tl = L.tilt?.afterLoss;
+    if (tw?.n >= 5 && tl?.n >= 5 && tw.rating - tl.rating >= 0.1) notes.push(`You play worse in the match after a loss (${tl.rating.toFixed(2)} vs ${tw.rating.toFixed(2)}) – use the 10-minute reset rule below.`);
+    const tod = (L.timeOfDay || []).filter((x) => x.n >= 8 && x.rating != null);
+    if (tod.length >= 2) {
+      const best = tod.reduce((a, b) => (b.rating > a.rating ? b : a)), worst = tod.reduce((a, b) => (b.rating < a.rating ? b : a));
+      if (best.rating - worst.rating >= 0.12) notes.push(`You play best in the ${best.label.split(" (")[0].toLowerCase()} and worst ${worst.label.split(" (")[0].toLowerCase()} – plan the important games accordingly.`);
+    }
+    const stack = (L.duos || []).filter((x) => x.with.n >= 5).slice(0, 4);
+    if (stack.length) notes.push(`Your most common teammates: ${stack.map((x) => `${x.nick} (${x.with.n} games)`).join(", ")}.`);
+  }
+  const o = mp.available ? mp.overall : null;
+  if (o?.trail?.n >= 5 && o.trail.rate <= 25) notes.push(`You win only ${pc(o.trail.rate)} of games when behind at half – the halftime reset below matters most for you.`);
+  if (o?.lead?.n >= 5 && o.lead.rate <= 70) notes.push(`You convert only ${pc(o.lead.rate)} of halftime leads – stay on your defaults after the switch instead of loosening up.`);
+  if (o?.close?.n >= 5 && o.close.rate <= 35) notes.push(`You lose most close games (${pc(o.close.rate)} won when decided by ≤ 3 rounds) – late-round calm and clear calls decide these.`);
+
+  const col = (title, items) => `<div><div class="prio-do" style="margin-bottom:6px">${title}</div><ul class="todo">${items.map((t) => `<li>${t}</li>`).join("")}</ul></div>`;
+  return `<div class="card" style="margin-bottom:16px">
+    <h2>Pre-match: team mentality</h2>
+    <div class="sub">For a stack of five who know each other – the goal is a calm, clear team that stays a team when rounds go wrong.</div>
+    ${notes.length ? `<div class="notice" style="margin:10px 0 14px"><b>From your data:</b><ul class="todo" style="margin-top:6px">${notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></div>` : ""}
+    <div class="grid g3" style="margin:0">
+      ${col("Before you queue", [
+        "<b>Agree on the session:</b> how many matches (3 is a good default) and a stop rule – e.g. stop after two losses in a row.",
+        "<b>Settle roles and the caller</b> for the maps you'll play – who enters, who supports, who anchors, who calls mid-round. Decided before, not during.",
+        "<b>Pick one team focus</b> for the session, e.g. “trade every entry” or “use all utility before dying” – one thing, not five.",
+        "<b>Warm up together</b> for 10–15 minutes: deathmatch, then one prefire run of the map you're likely to play.",
+        "<b>Check the basics:</b> water at the desk, something to eat, phones away, Discord muted outside the team channel.",
+      ])}
+      ${col("During the match", [
+        "<b>Comms: information first, short.</b> Callouts, numbers, damage – then quiet. One voice calls the mid-round; the others give info.",
+        "<b>No blame during the match.</b> Friends can joke – but “why did you peek” waits until after the game. Agree on this out loud before queuing.",
+        "<b>Five-second reset after a lost round:</b> the caller says the plan for the next round; nobody replays the last one.",
+        "<b>Name your own tilt:</b> “I'm tilted, I'll play support this half” is a strength, not a weakness – the others cover.",
+        "<b>Timeout after three lost rounds in a row:</b> breathe, one concrete change, one sentence of encouragement.",
+        "<b>Halftime:</b> one thing that's working, one thing to change for the other side. Then reset the mood – a fresh half.",
+      ])}
+      ${col("Between matches", [
+        "<b>Two-minute debrief:</b> one thing that worked, one thing to fix – about the team, not a person.",
+        "<b>After a loss, take 10 minutes</b> before queuing again – get up, drink water, talk about something else.",
+        "<b>Keep to the stop rule</b> you agreed on, even when someone wants “one more”.",
+        "<b>Praise out loud</b> – a good trade, a smart call, a clutch save. In a stack of friends, morale is part of the aim.",
+        "<b>Save the deeper review</b> (demos, who should have done what) for another day, calmly, with the replay open.",
+      ])}
+    </div>
+  </div>`;
 }
 
 /* ------------------------------------------------- performance score tip --- */
@@ -1021,7 +1078,6 @@ function summarize(list) {
 
 /* -------------------------------------------------------------- wiring --- */
 $("#search").onsubmit = (e) => { e.preventDefault(); lookup($("#q").value.trim()); };
-$("#demoBtn").onclick = () => lookup("demo");
 $(".brand").style.cursor = "pointer";
 $(".brand").onclick = () => { history.replaceState(null, "", location.pathname); $("#report").hidden = true; $("#error").hidden = true; $("#welcome").hidden = false; loadHome(); };
 $("#settingsBtn").onclick = async () => {
