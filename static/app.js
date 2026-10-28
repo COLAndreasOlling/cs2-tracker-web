@@ -600,6 +600,7 @@ function prematchSection(d) {
       ${col("During the match", [
         "<b>Comms: information first, short.</b> Callouts, numbers, damage – then quiet. One voice calls the mid-round; the others give info.",
         "<b>No blame during the match.</b> Friends can joke – but “why did you peek” waits until after the game. Agree on this out loud before queuing.",
+        "<b>Praise after a good round</b> – short and specific, in the buy phase: “nice trade”, “great flash, that won it”, “good call”. It keeps confidence up and tells the team what to repeat.",
         "<b>Five-second reset after a lost round:</b> the caller says the plan for the next round; nobody replays the last one.",
         "<b>Name your own tilt:</b> “I'm tilted, I'll play support this half” is a strength, not a weakness – the others cover.",
         "<b>Timeout after three lost rounds in a row:</b> breathe, one concrete change, one sentence of encouragement.",
@@ -609,7 +610,7 @@ function prematchSection(d) {
         "<b>Two-minute debrief:</b> one thing that worked, one thing to fix – about the team, not a person.",
         "<b>After a loss, take 10 minutes</b> before queuing again – get up, drink water, talk about something else.",
         "<b>Keep to the stop rule</b> you agreed on, even when someone wants “one more”.",
-        "<b>Praise out loud</b> – a good trade, a smart call, a clutch save. In a stack of friends, morale is part of the aim.",
+        "<b>Name the best play of the match</b> in the debrief – a trade, a call, a clutch. In a stack of friends, morale is part of the aim.",
         "<b>Save the deeper review</b> (demos, who should have done what) for another day, calmly, with the replay open.",
       ])}
     </div>
