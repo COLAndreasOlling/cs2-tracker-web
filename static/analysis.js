@@ -903,10 +903,13 @@ const Analysis = (() => {
         (combos[sel.map((t) => t.id).join(",")] ||= { players: sel, ms: [] }).ms.push(m);
       }
     }
-    const recurring = Object.values(combos).filter((c) => c.ms.length >= (c.players.length === 4 ? 2 : 3));
-    // drop a group when a bigger one containing it covers most of its matches – that's the same stack
-    const covers = (big, small) => big.players.length > small.players.length && small.players.every((p) => big.players.some((q) => q.id === p.id));
-    out.stacks = recurring.filter((c) => !recurring.some((b) => covers(b, c) && b.ms.length >= 0.75 * c.ms.length))
+    // full 5-stacks that played 2+ matches together; only if there are none, fall back to 4-stacks, then 3-stacks
+    let recurring = [];
+    for (const k of [4, 3, 2]) {
+      recurring = Object.values(combos).filter((c) => c.players.length === k && c.ms.length >= 2);
+      if (recurring.length) break;
+    }
+    out.stacks = recurring
       .sort((a, b) => b.ms.length - a.ms.length || b.players.length - a.players.length).slice(0, 8)
       .map((c) => {
         const maps = {};

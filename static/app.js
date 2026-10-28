@@ -570,7 +570,7 @@ const meOf = (d) => (d.faceit?.available ? d.faceit.nickname : d.steam64);
 /** Clickable list of the groups of teammates this player keeps queuing with (from Analysis.lobbies). */
 function stacksHtml(d, L, active = []) {
   if (!L.available) return `<div class="empty">${esc(L.reason)}</div>`;
-  if (!L.stacks?.length) return `<div class="empty">No group of teammates shows up together in 3+ of the recent FACEIT matches.</div>`;
+  if (!L.stacks?.length) return `<div class="empty">No group of teammates has played more than one of the recent FACEIT matches together.</div>`;
   const pc = (v) => (v == null ? "–" : `${Math.round(v)}%`), f2 = (v) => (v == null ? "–" : v.toFixed(2));
   const on = new Set(active.map((x) => x.toLowerCase()));
   return `<div class="stacklist">${L.stacks.map((s, i) => {
@@ -592,7 +592,7 @@ function showTeam(names = [], auto = false, d = null) {
   const L = d ? Analysis.lobbies(d) : null;
   $("#team").innerHTML = `
     ${L ? `<div class="card" style="margin-bottom:16px" id="stackCard"><h2>${esc(meOf(d))}'s usual stacks</h2>
-      <div class="sub">Groups of teammates from the recent FACEIT matches – pick the one you're about to play with. Win % and rating are ${esc(meOf(d))}'s results in those games.</div>
+      <div class="sub">Full 5-stacks from the recent FACEIT matches (smaller groups only if there are none) – pick the one you're about to play with. Win % and rating are ${esc(meOf(d))}'s results in those games.</div>
       ${stacksHtml(d, L, names)}</div>` : ""}
     <div class="card" style="margin-bottom:16px">
       <h2>Team view</h2>
@@ -961,7 +961,7 @@ function drawLobbies(d) {
         <div class="statlist" style="margin-top:10px"><div class="row"><span>Next match after a win / after a loss</span><b>${f2(L.tilt.afterWin.rating)} / ${f2(L.tilt.afterLoss.rating)} <span class="muted" style="font-weight:400">rating</span></b></div></div></div>
       <div class="card"><h2>Time of day</h2><div class="sub">Your local time when the match started</div>${table(L.timeOfDay, "Time")}</div>
     </div>
-    <div class="card" style="margin-bottom:16px" id="stackCard"><h2>Usual stacks</h2><div class="sub">Groups of teammates that keep showing up together – click one to open it in the Team view</div>${stacksHtml(d, L)}</div>
+    <div class="card" style="margin-bottom:16px" id="stackCard"><h2>Usual stacks</h2><div class="sub">Full 5-stacks that played 2+ recent FACEIT matches together (smaller groups only if there are none) – click one to open it in the Team view</div>${stacksHtml(d, L)}</div>
     <div class="card" style="margin-bottom:16px"><h2>Duos</h2><div class="sub">Teammates in 5+ of your recent FACEIT matches – your results with them vs without them</div>${duoTable}</div>`;
   bindStacks(el, d, L);
 }
