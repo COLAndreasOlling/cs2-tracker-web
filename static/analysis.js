@@ -910,14 +910,14 @@ const Analysis = (() => {
       if (recurring.length) break;
     }
     out.stacks = recurring
-      .sort((a, b) => b.ms.length - a.ms.length || b.players.length - a.players.length)
       .map((c) => {
         const maps = {};
         for (const m of c.ms) if (m.map) (maps[m.map] ||= []).push(m);
         const topMaps = Object.entries(maps).map(([map, ms]) => ({ map, ...group(ms) })).sort((a, b) => b.n - a.n).slice(0, 3);
         const last = c.ms.map((m) => m.ctx.started).filter(Boolean).sort().pop() || null;
         return { players: c.players, size: c.players.length + 1, ...group(c.ms), maps: topMaps, last };
-      });
+      })
+      .sort((a, b) => b.n - a.n || (b.last || "").localeCompare(a.last || "")); // most games, then most recently played
 
     // 4. sessions: a new session starts after a 90-minute break
     const chrono = withCtx.filter((m) => m.ctx.started).sort((a, b) => a.ctx.started.localeCompare(b.ctx.started));
