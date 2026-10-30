@@ -573,7 +573,7 @@ function stacksHtml(d, L, active = []) {
   if (!L.stacks?.length) return `<div class="empty">No group of teammates has played more than one of the recent FACEIT matches together.</div>`;
   const pc = (v) => (v == null ? "–" : `${Math.round(v)}%`), f2 = (v) => (v == null ? "–" : v.toFixed(2));
   const on = new Set(active.map((x) => x.toLowerCase()));
-  return `<div class="stacklist">${L.stacks.map((s, i) => {
+  return `<div class="muted" style="font-size:12px;margin-top:6px">${L.stacks.length} line-up${L.stacks.length === 1 ? "" : "s"} with 2+ matches together, most played first</div><div class="stacklist">${L.stacks.map((s, i) => {
     const sel = s.players.every((p) => on.has(p.nick.toLowerCase())) && on.size === s.players.length + 1;
     const wr = s.winrate == null ? "" : s.winrate >= 55 ? "up" : s.winrate < 45 ? "down" : "";
     return `<button type="button" class="stackrow${sel ? " on" : ""}" data-stack="${i}" title="Analyse this stack">

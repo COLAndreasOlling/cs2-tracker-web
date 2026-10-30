@@ -175,7 +175,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .teamform input { min-width: 0; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary); font: inherit; }
 .teamgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .teamcard { padding: 14px; }
-.stacklist { display: grid; gap: 6px; margin-top: 8px; }
+.stacklist { display: grid; gap: 6px; margin-top: 8px; max-height: 460px; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
 .stackrow { display: grid; gap: 4px; text-align: left; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-primary); font: inherit; cursor: pointer; }
 .stackrow:hover, .stackrow:focus-visible { border-color: var(--accent, #eb6834); }
 .stackrow.on { border-color: var(--accent, #eb6834); box-shadow: inset 3px 0 0 var(--accent, #eb6834); }

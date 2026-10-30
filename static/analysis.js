@@ -910,7 +910,7 @@ const Analysis = (() => {
       if (recurring.length) break;
     }
     out.stacks = recurring
-      .sort((a, b) => b.ms.length - a.ms.length || b.players.length - a.players.length).slice(0, 8)
+      .sort((a, b) => b.ms.length - a.ms.length || b.players.length - a.players.length)
       .map((c) => {
         const maps = {};
         for (const m of c.ms) if (m.map) (maps[m.map] ||= []).push(m);
