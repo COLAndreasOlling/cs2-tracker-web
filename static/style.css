@@ -157,6 +157,11 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .strength.exceptional small { color: rgba(255,255,255,.85); }
 @keyframes shine { 50% { box-shadow: 0 0 22px 1px #ffb300; } }
 @media (prefers-reduced-motion: reduce) { .strength.exceptional { animation: none; } }
+.weakness { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; color: var(--bad-text); background: color-mix(in srgb, var(--bad) 12%, transparent); border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent); }
+.weakness small { font-weight: 500; font-size: 11px; color: var(--text-muted); }
+.weakness.severe { color: #fff; background: var(--bad); border-color: var(--bad); }
+.weakness.severe small { color: rgba(255,255,255,.85); }
+.strengths + .strengths { margin-top: 6px; }
 .strength small { font-weight: 500; font-size: 11px; color: var(--text-muted); }
 .hero h1 { font-size: 26px; }
 .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; font-size: 13px; }

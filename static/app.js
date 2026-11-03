@@ -783,10 +783,10 @@ function prematchSection(d) {
 }
 
 /* ------------------------------------------------- strengths & rank edge --- */
-/** What this player is clearly above average at: up to 3, each scored like the performance score (50 = average). */
-function strengths(d) {
+/** Each stat scored like the performance score (50 = average), for the Strong at / Weak at rows. */
+function skillCandidates(d) {
   const r = d.leetify.available ? d.leetify.rating || {} : {}, o = d.overall || {}, c = [];
-  const add = (label, raw, v) => { if (v != null && isFinite(v)) c.push({ label, raw, v }); };
+  const add = (label, raw, v, onlyGood) => { if (v != null && isFinite(v)) c.push({ label, raw, v, onlyGood }); };
   if (r.aim != null) add("Aim", `Leetify ${r.aim.toFixed(0)}`, r.aim);
   if (r.positioning != null) add("Positioning", `Leetify ${r.positioning.toFixed(0)}`, r.positioning);
   if (r.utility != null) add("Utility", `Leetify ${r.utility.toFixed(0)}`, r.utility);
@@ -795,15 +795,18 @@ function strengths(d) {
   if (o.adr != null) add("Damage", `ADR ${o.adr.toFixed(0)}`, 50 + (o.adr - 77) * 2);
   if (o.hs != null) add("Headshots", `${Math.round(o.hs)}% HS`, 50 + (o.hs - 45) * 2.5);
   if (o.winrate != null && (o.matches || 0) >= 10) add("Winning games", `${Math.round(o.winrate)}% wins`, o.winrate * 1.25 - 12.5);
-  if (r.ct != null && r.t != null && Math.abs(r.ct - r.t) >= 2.5) add(r.ct > r.t ? "CT side" : "T side", `Leetify ${signed(Math.max(r.ct, r.t), 1)} vs ${signed(Math.min(r.ct, r.t), 1)}`, 50 + Math.abs(r.ct - r.t) * 4);
-  c.sort((a, b) => b.v - a.v);
-  return c.filter((x) => x.v >= 65).slice(0, 3);
+  if (r.ct != null && r.t != null && Math.abs(r.ct - r.t) >= 2.5) add(r.ct > r.t ? "CT side" : "T side", `Leetify ${signed(Math.max(r.ct, r.t), 1)} vs ${signed(Math.min(r.ct, r.t), 1)}`, 50 + Math.abs(r.ct - r.t) * 4, true);
+  return c;
 }
-
+/** Clearly above average (65+), best first, up to 3. */
+const strengths = (d) => skillCandidates(d).filter((x) => x.v >= 65).sort((a, b) => b.v - a.v).slice(0, 3);
+/** Clearly below average (35 or less), worst first, up to 3. Side gaps only count as strengths. */
+const weaknesses = (d) => skillCandidates(d).filter((x) => !x.onlyGood && x.v <= 35).sort((a, b) => a.v - b.v).slice(0, 3);
 
 function strengthsHtml(d) {
-  const top = strengths(d);
-  return top.length ? `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => { const lvl = x.v >= 90 ? " exceptional" : x.v >= 80 ? " elite" : ""; return `<span class="strength${lvl}" title="${esc(x.raw)}${lvl ? ` – ${x.v >= 90 ? "exceptional" : "elite"}` : ""}">${lvl ? "★ " : ""}${esc(x.label)}<small>${esc(x.raw)}</small></span>`; }).join("")}</div>` : "";
+  const top = strengths(d), low = weaknesses(d);
+  return (top.length ? `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => { const lvl = x.v >= 90 ? " exceptional" : x.v >= 80 ? " elite" : ""; return `<span class="strength${lvl}" title="${esc(x.raw)}${lvl ? ` – ${x.v >= 90 ? "exceptional" : "elite"}` : ""}">${lvl ? "★ " : ""}${esc(x.label)}<small>${esc(x.raw)}</small></span>`; }).join("")}</div>` : "")
+    + (low.length ? `<div class="strengths"><span class="k">Weak at</span>${low.map((x) => `<span class="weakness${x.v <= 20 ? " severe" : ""}" title="${esc(x.raw)}${x.v <= 20 ? " – far below average" : ""}">${esc(x.label)}<small>${esc(x.raw)}</small></span>`).join("")}</div>` : "");
 }
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };
