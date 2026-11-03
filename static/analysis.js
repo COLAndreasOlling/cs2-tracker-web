@@ -204,6 +204,8 @@ const Analysis = (() => {
       entry_rate: per((m) => fxOf(m)?.entry_count),
       entry_success: entries && entries.b >= 10 ? (100 * entries.a) / entries.b : null,
       clutch_1v1: clutch && clutch.b >= 5 ? (100 * clutch.a) / clutch.b : null,
+      // last alive: rounds that ended as a 1v1 or 1v2 for the player (FACEIT doesn't count 1v3+), per round
+      last_alive_pr: per((m) => (fxOf(m)?.v1_count != null ? fxOf(m).v1_count + (fxOf(m).v2_count || 0) : null)),
       sniper_share: (() => { const s = pairSum(rows, (m) => fxOf(m)?.sniper_kills, (m) => m.kills); return s && s.b >= 50 ? s.a / s.b : null; })(),
       preaim: mean(ms.map((m) => m.aim_preaim)),
       head: mean(e("acc_head")),
@@ -580,7 +582,7 @@ const Analysis = (() => {
     const entryRate = p.entry_rate ?? frac(life.entry_rate);
     const tradeSuccess = d.leetify?.stats?.trade_kills_success_percentage ?? null;
     const sig = { tradeOpp: p.trade_opp_pr, tradedOpp: p.traded_opp_pr, survival: p.survival, util: p.util_pr, enemiesFlashed: p.blinded_pr,
-      kpr: p.kpr, apr: p.apr, adr: p.adr };
+      kpr: p.kpr, apr: p.apr, adr: p.adr, lastAlive: p.last_alive_pr };
 
     const why = (label, value) => ({ label, value });
     const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
@@ -643,7 +645,7 @@ const Analysis = (() => {
     // playstyle tags: how the player spends the early round (no positions or timings in the APIs, so estimates)
     const tags = [];
     const quietEarly = inv(lin(entryRate, 0.12, 0.22)); // rarely in the round's first duels
-    const bait = hasTrade ? weighted([[quietEarly, 0.3], [lin(sig.tradeOpp, 0.3, 0.5), 0.3], [inv(lin(sig.tradedOpp, 0.12, 0.25)), 0.2], [lin(sig.survival, 28, 42), 0.2]]) : null;
+    const bait = hasTrade ? weighted([[quietEarly, 0.25], [lin(sig.tradeOpp, 0.3, 0.5), 0.3], [inv(lin(sig.tradedOpp, 0.12, 0.25)), 0.15], [lin(sig.survival, 28, 42), 0.15], [lin(sig.lastAlive, 0.04, 0.07), 0.15]]) : null;
     if (!isAwper && bait != null && bait >= TAG_MIN) {
       const facts = `Rarely first in (${f2(entryRate ?? 0)} first duels per round), often right behind a teammate who dies (${f2(sig.tradeOpp)} trade chances per round), survives ${pct(sig.survival)} of rounds`;
       if (tradeSuccess != null && tradeSuccess < 45)
@@ -656,7 +658,7 @@ const Analysis = (() => {
         mate: "As a teammate: feels like baiting, but it pays off – make sure someone else is willing to go first.",
         opp: "As an opponent: after you get the opening kill, expect them right behind – reset your crosshair for the trade." });
     }
-    const passive = weighted([[quietEarly, 0.3], [lin(sig.survival, 30, 45), 0.3], [inv(lin(sig.adr, 65, 85)), 0.2], [inv(lin(sig.tradeOpp, 0.2, 0.4)), 0.2]]);
+    const passive = weighted([[quietEarly, 0.25], [lin(sig.survival, 30, 45), 0.25], [inv(lin(sig.adr, 65, 85)), 0.15], [inv(lin(sig.tradeOpp, 0.2, 0.4)), 0.15], [lin(sig.lastAlive, 0.04, 0.07), 0.2]]);
     if (!isAwper && passive != null && passive >= TAG_MIN)
       tags.push({ id: "passive", tone: "info", name: "Passive – plays for the late round", score: passive,
         detail: `Rarely in the first duels (${f2(entryRate ?? 0)} per round), survives ${pct(sig.survival)} of rounds, ${sig.adr != null ? `ADR ${sig.adr.toFixed(0)}` : "low damage"}${sig.tradeOpp != null ? `, often away from teammates (${f2(sig.tradeOpp)} trade chances per round)` : ""} – quiet early, alive late.`,
@@ -664,7 +666,9 @@ const Analysis = (() => {
         opp: "As an opponent: expect slow rounds, held angles and late flanks – check behind you after the bomb plant, and don't waste time waiting them out." });
 
     // aggression scale, 0 = waits behind teammates / plays late, 50 = balanced, 100 = hyper-aggressive
-    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.4], [inv(lin(sig.survival, 25, 42)), 0.25], [lin(sig.tradedOpp, 0.12, 0.30), 0.2], [inv(lin(sig.tradeOpp, 0.25, 0.5)), 0.15]]);
+    // last alive: the player still standing when the rest of the team is dead - passive and baiting players end up there often
+    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.35], [inv(lin(sig.survival, 25, 42)), 0.2], [lin(sig.tradedOpp, 0.12, 0.30), 0.15],
+      [inv(lin(sig.tradeOpp, 0.25, 0.5)), 0.15], [inv(lin(sig.lastAlive, 0.025, 0.065)), 0.15]]);
     let aggression = null;
     if (aggScore != null) {
       const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
@@ -673,7 +677,8 @@ const Analysis = (() => {
       const tone = "info", reckless = aggScore > 55 && entryWin != null && entryWin < 45;
       aggression = { score: aggScore, label: reckless ? `${label} – loses the first duel` : label, tone: reckless ? "bad" : tone,
         why: [...known("First duels per round (~0.20 average)", entryRate, f2), ...known("Opening duels won", entryWin, pct), ...known("Rounds survived", sig.survival, pct),
-          ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Right behind a teammate who dies, per round", sig.tradeOpp, f2)] };
+          ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Right behind a teammate who dies, per round", sig.tradeOpp, f2),
+          ...known("Last alive (1v1/1v2), share of rounds", sig.lastAlive == null ? null : 100 * sig.lastAlive, (v) => `${v.toFixed(1)}%`)] };
     }
 
     return {
