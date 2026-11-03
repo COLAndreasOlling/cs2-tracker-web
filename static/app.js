@@ -296,7 +296,7 @@ function render(d) {
       ${id.avatar ? `<img src="${esc(id.avatar)}" alt="">` : ""}<b>${esc(id.name)}</b>${level ? `<span class="muted">${esc(level)}</span>` : ""}${score != null ? `<span class="muted">Score ${score}</span>` : ""}
     </div>
   </nav>
-  <div class="card hero${rankEdge(d) ? " edged" : ""}"${rankEdge(d) ? ` style="--edge:${rankEdge(d).color}" title="${esc(rankEdge(d).why)}"` : ""}>
+  <div class="card hero${rankEdge(d) ? ` edged edge-${rankEdge(d).tier}` : ""}"${rankEdge(d) ? ` style="--edge:${rankEdge(d).color}" title="${esc(rankEdge(d).why)}"` : ""}>
     ${id.avatar ? `<img class="avatar" src="${esc(id.avatar)}" alt="">` : `<div class="avatar">${esc((id.name || "?")[0].toUpperCase())}</div>`}
     <div>
       <h1>${esc(id.name)} ${id.country ? `<span class="muted" style="font-size:14px;font-weight:500">${esc(id.country.toUpperCase())}</span>` : ""}</h1>
@@ -808,13 +808,14 @@ function strengthsHtml(d) {
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };
 const PREMIER_COLORS = [[5000, "#b0c3d9"], [10000, "#8cc6ff"], [15000, "#6a7dff"], [20000, "#c166ff"], [25000, "#f03cff"], [30000, "#eb4b4b"], [Infinity, "#fed700"]];
-/** Border colour for the player block: FACEIT level colours (one skill ladder for everyone); Premier tier colours if no FACEIT level. */
+/** Border for the player block: FACEIT level colours (one skill ladder for everyone), Premier tier colours if no FACEIT level.
+ *  Weight grows with the level – low levels get a faint line, only the top gets a glow. */
 function rankEdge(d) {
   const fc = d.faceit || {}, lt = d.leetify || {};
   const lvl = fc.available ? fc.level : lt.available ? lt.ranks.faceit : null;
-  if (lvl) return { color: FACEIT_LVL_COLORS[Math.max(1, Math.min(10, lvl))], why: `Border: FACEIT level ${lvl} colour` };
+  if (lvl) return { color: FACEIT_LVL_COLORS[Math.max(1, Math.min(10, lvl))], tier: lvl >= 10 ? "top" : lvl >= 8 ? "high" : lvl >= 4 ? "mid" : "low", why: `Border: FACEIT level ${lvl} colour` };
   const pr = lt.available ? lt.ranks.premier : null;
-  if (pr) return { color: PREMIER_COLORS.find(([max]) => pr < max)[1], why: `Border: Premier ${pr} tier colour (no FACEIT level)` };
+  if (pr) return { color: PREMIER_COLORS.find(([max]) => pr < max)[1], tier: pr >= 25000 ? "top" : pr >= 20000 ? "high" : pr >= 10000 ? "mid" : "low", why: `Border: Premier ${pr} tier colour (no FACEIT level)` };
   return null;
 }
 
