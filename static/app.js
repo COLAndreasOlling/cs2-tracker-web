@@ -531,7 +531,7 @@ const AGG_TIPS = [];
 function aggroMeter(a) {
   if (!a) return "";
   AGG_TIPS.push(aggroTipHtml(a));
-  return `<span class="aggro ${a.tone}" tabindex="0" data-aggtip="${AGG_TIPS.length - 1}"><span class="aggro-ends">Bait</span><span class="aggro-track"><span class="aggro-dot" style="left:${a.score}%"></span></span><span class="aggro-ends">Aggro</span><b>${esc(a.label)}</b></span>`;
+  return `<span class="aggro ${a.tone}${a.lowConfidence ? " low" : ""}" tabindex="0" data-aggtip="${AGG_TIPS.length - 1}"><span class="aggro-ends">Bait</span><span class="aggro-track"><span class="aggro-dot" style="left:${a.score}%"></span></span><span class="aggro-ends">Aggro</span><b>${esc(a.label)}</b>${a.lowConfidence ? `<span class="muted">(low confidence)</span>` : ""}</span>`;
 }
 
 /** The meter's breakdown: each signal's points (they add up to the score) and how far it pushes from balanced. */
@@ -544,6 +544,7 @@ function aggroTipHtml(a) {
       ${used.map((p) => `<tr><td>${esc(p.label)}</td><td class="n">${esc(p.raw)}</td><td class="n">${p.points.toFixed(1)} <span class="muted">/ ${p.max.toFixed(1)}</span></td>${push(p.push)}</tr>
         <tr class="refrow"><td colspan="4">passive → aggressive: ${esc(p.range)}</td></tr>`).join("")}
       <tr class="sum"><td colspan="2">Total</td><td class="n">${a.score}</td>${push(a.score - 50)}</tr></tbody></table>
+    ${a.lowConfidence ? `<div class="down" style="margin-top:6px">Low confidence: only ${a.coverage}% of the signals have data. First deaths, last alive and multi-kills come from FACEIT match stats – sign in to get them.</div>` : ""}
     ${missing.length ? `<div class="muted" style="margin-top:6px">No data, left out (the others count for more): ${missing.map((p) => esc(p.label)).join(", ")}</div>` : ""}
     ${a.info.length ? `<div class="muted" style="margin-top:6px">Not counted, for context: ${a.info.map((w) => `${esc(w.label)} ${esc(w.value)}`).join(" · ")}</div>` : ""}`;
 }
