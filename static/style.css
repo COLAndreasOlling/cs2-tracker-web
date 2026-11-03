@@ -148,7 +148,6 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .strengths .k { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-right: 2px; }
 .strength { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; color: var(--good-text); background: color-mix(in srgb, var(--good) 14%, transparent); border: 1px solid color-mix(in srgb, var(--good) 40%, transparent); }
 .strength small { font-weight: 500; font-size: 11px; color: var(--text-muted); }
-.strength.plain { color: var(--text); background: var(--surface-2); border-color: var(--border); }
 .hero h1 { font-size: 26px; }
 .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; font-size: 13px; }
 .ranks { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }

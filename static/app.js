@@ -797,18 +797,14 @@ function strengths(d) {
   if (o.hs != null) add("Headshots", `${Math.round(o.hs)}% HS`, 50 + (o.hs - 45) * 2.5);
   if (o.winrate != null && (o.matches || 0) >= 10) add("Winning games", `${Math.round(o.winrate)}% wins`, o.winrate * 1.25 - 12.5);
   if (r.ct != null && r.t != null && Math.abs(r.ct - r.t) >= 2.5) add(r.ct > r.t ? "CT side" : "T side", `Leetify ${signed(Math.max(r.ct, r.t), 1)} vs ${signed(Math.min(r.ct, r.t), 1)}`, 50 + Math.abs(r.ct - r.t) * 4);
-  const maps = (d.map_pool || []).filter((m) => (m.recent.matches || 0) >= 5 && m.recent.winrate != null && o.winrate != null && m.recent.winrate >= Math.max(55, o.winrate + 10));
-  const best = maps.sort((a, b) => b.recent.winrate - a.recent.winrate)[0];
-  if (best) add(`${best.map}`, `${Math.round(best.recent.winrate)}% wins in ${best.recent.matches}`, 50 + (best.recent.winrate - o.winrate) * 1.2);
   c.sort((a, b) => b.v - a.v);
-  const top = c.filter((x) => x.v >= 62).slice(0, 3);
-  return { top, best: top.length ? null : c[0] || null };
+  return c.filter((x) => x.v >= 65).slice(0, 3);
 }
 
+
 function strengthsHtml(d) {
-  const { top, best } = strengths(d);
-  if (top.length) return `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => `<span class="strength" title="${esc(x.raw)}">${esc(x.label)}<small>${esc(x.raw)}</small></span>`).join("")}</div>`;
-  return best ? `<div class="strengths"><span class="k">No standout strength yet · best area</span><span class="strength plain">${esc(best.label)}<small>${esc(best.raw)}</small></span></div>` : "";
+  const top = strengths(d);
+  return top.length ? `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => `<span class="strength" title="${esc(x.raw)}">${esc(x.label)}<small>${esc(x.raw)}</small></span>`).join("")}</div>` : "";
 }
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };
