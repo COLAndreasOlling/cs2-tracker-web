@@ -835,7 +835,7 @@ function currentForm(d) {
   if (recent.adr != null && base.adr) parts.push([(recent.adr - base.adr) / base.adr / 0.12, 0.35]);
   if (recent.winrate != null && base.winrate != null) parts.push([(recent.winrate - base.winrate) / 20, 0.2]);
   const w = parts.reduce((a, [, x]) => a + x, 0), z = parts.reduce((a, [v, x]) => a + Math.max(-3, Math.min(3, v)) * x, 0) / w;
-  const [label, tone] = z >= 1.6 ? ["🔥 On fire", "hot"] : z >= 0.8 ? ["Good form", "good"] : z <= -1.6 ? ["Ice cold", "poor"] : z <= -0.8 ? ["Poor form", "poor"] : ["Normal form", "normal"];
+  const [label, tone] = z >= 1.6 ? ["🔥 On fire", "hot"] : z >= 0.8 ? ["Good form", "good"] : z <= -0.8 ? ["Poor form", "poor"] : ["Normal form", "normal"];
   const bits = [`K/D ${recent.kd.toFixed(2)} vs ${base.kd.toFixed(2)}`];
   if (recent.adr != null && base.adr) bits.push(`ADR ${Math.round(recent.adr)} vs ${Math.round(base.adr)}`);
   if (recent.decided) bits.push(`${recent.wins}–${recent.decided - recent.wins}${base.winrate != null ? ` (usually ${Math.round(base.winrate)}% wins)` : ""}`);
