@@ -308,7 +308,7 @@ function render(d) {
         ${lt.available && lt.first_match ? `<span class="muted">Tracked on Leetify since ${new Date(lt.first_match).toLocaleDateString()}</span>` : ""}
       </div>
       ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span>${aggroMeter(roleEst.aggression)}${tagChips(roleEst.tags)}</div>` : ""}
-      ${strengthsHtml(d)}
+      ${formHtml(state.data || d)}${strengthsHtml(d)}
       <div class="ranks">${ranks.map(([k, v]) => `<div class="rank"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
     </div>
@@ -807,6 +807,44 @@ function strengthsHtml(d) {
   const top = strengths(d), low = weaknesses(d);
   return (top.length ? `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => { const lvl = x.v >= 90 ? " exceptional" : x.v >= 80 ? " elite" : ""; return `<span class="strength${lvl}" title="${esc(x.raw)}${lvl ? ` – ${x.v >= 90 ? "exceptional" : "elite"}` : ""}">${lvl ? "★ " : ""}${esc(x.label)}<small>${esc(x.raw)}</small></span>`; }).join("")}</div>` : "")
     + (low.length ? `<div class="strengths"><span class="k">Weak at</span>${low.map((x) => `<span class="weakness${x.v <= 20 ? " severe" : ""}" title="${esc(x.raw)}${x.v <= 20 ? " – far below average" : ""}">${esc(x.label)}<small>${esc(x.raw)}</small></span>`).join("")}</div>` : "");
+}
+
+/** Current form: last 10 matches vs lifetime. FACEIT matches vs FACEIT lifetime when available (like for like),
+ *  otherwise the last 10 vs the rest of the loaded history. Always uses every loaded match, not the platform/last-N filter. */
+function currentForm(d) {
+  const all = d.matches || [], life = d.faceit?.available ? d.faceit.lifetime || {} : {};
+  const sumOf = (ms, f) => ms.reduce((a, m) => a + (f(m) || 0), 0);
+  const stats = (ms) => {
+    const dec = ms.filter((m) => m.outcome === "win" || m.outcome === "loss"), withAdr = ms.filter((m) => m.adr != null && m.rounds);
+    const deaths = sumOf(ms, (m) => m.deaths);
+    return { n: ms.length, wins: dec.filter((m) => m.outcome === "win").length, decided: dec.length,
+      kd: deaths ? sumOf(ms, (m) => m.kills) / deaths : null,
+      adr: withAdr.length ? sumOf(withAdr, (m) => m.adr * m.rounds) / sumOf(withAdr, (m) => m.rounds) : null,
+      winrate: dec.length ? (100 * dec.filter((m) => m.outcome === "win").length) / dec.length : null };
+  };
+  const fms = all.filter((m) => m.source === "faceit");
+  let recent, base, basis;
+  if (life.kd != null && (life.matches || 0) >= 30 && fms.length >= 5) {
+    recent = stats(fms.slice(0, 10)); base = { kd: life.kd, adr: life.adr, winrate: life.winrate }; basis = `last ${recent.n} FACEIT matches vs FACEIT lifetime (${fmtInt(life.matches)} matches)`;
+  } else if (all.length >= 20) {
+    recent = stats(all.slice(0, 10)); base = stats(all.slice(10)); basis = `last ${recent.n} matches vs the ${base.n} before`;
+  } else return null;
+  if (recent.kd == null || base.kd == null) return null;
+  // each part in "clearly better/worse" units: K/D ±15%, ADR ±12%, win rate ±20 points
+  const parts = [[(recent.kd - base.kd) / base.kd / 0.15, 0.45]];
+  if (recent.adr != null && base.adr) parts.push([(recent.adr - base.adr) / base.adr / 0.12, 0.35]);
+  if (recent.winrate != null && base.winrate != null) parts.push([(recent.winrate - base.winrate) / 20, 0.2]);
+  const w = parts.reduce((a, [, x]) => a + x, 0), z = parts.reduce((a, [v, x]) => a + Math.max(-3, Math.min(3, v)) * x, 0) / w;
+  const [label, tone] = z >= 1.6 ? ["🔥 On fire", "hot"] : z >= 0.8 ? ["Good form", "good"] : z <= -1.6 ? ["❄ Ice cold", "cold"] : z <= -0.8 ? ["Poor form", "poor"] : ["Normal form", "normal"];
+  const bits = [`K/D ${recent.kd.toFixed(2)} vs ${base.kd.toFixed(2)}`];
+  if (recent.adr != null && base.adr) bits.push(`ADR ${Math.round(recent.adr)} vs ${Math.round(base.adr)}`);
+  if (recent.decided) bits.push(`${recent.wins}–${recent.decided - recent.wins}${base.winrate != null ? ` (usually ${Math.round(base.winrate)}% wins)` : ""}`);
+  return { label, tone, detail: bits.join(" · "), basis };
+}
+
+function formHtml(d) {
+  const f = currentForm(d);
+  return f ? `<div class="strengths"><span class="k">Form</span><span class="form ${f.tone}" title="${esc(f.basis)}">${esc(f.label)}<small>${esc(f.detail)}</small></span></div>` : "";
 }
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };
