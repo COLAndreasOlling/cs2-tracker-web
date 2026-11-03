@@ -803,7 +803,7 @@ function strengths(d) {
 
 function strengthsHtml(d) {
   const top = strengths(d);
-  return top.length ? `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => `<span class="strength" title="${esc(x.raw)}">${esc(x.label)}<small>${esc(x.raw)}</small></span>`).join("")}</div>` : "";
+  return top.length ? `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => { const lvl = x.v >= 90 ? " exceptional" : x.v >= 80 ? " elite" : ""; return `<span class="strength${lvl}" title="${esc(x.raw)}${lvl ? ` – ${x.v >= 90 ? "exceptional" : "elite"}` : ""}">${lvl ? "★ " : ""}${esc(x.label)}<small>${esc(x.raw)}</small></span>`; }).join("")}</div>` : "";
 }
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };

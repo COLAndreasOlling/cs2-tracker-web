@@ -19,6 +19,7 @@
   --good-text: #006300;
   --bad: #d03b3b;
   --bad-text: #b02727;
+  --gold-text: #8a6100;
   --warn: #fab219;
   --shadow: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.04);
 }
@@ -29,7 +30,7 @@
     --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
     --accent: #ff7a45; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
     --div-pos: #3987e5; --div-neg: #e66767; --div-mid: #383835;
-    --good: #0ca30c; --good-text: #4cc94c; --bad: #d03b3b; --bad-text: #ef7d7d;
+    --good: #0ca30c; --good-text: #4cc94c; --bad: #d03b3b; --bad-text: #ef7d7d; --gold-text: #f5c84a;
     --shadow: none;
   }
 }
@@ -39,7 +40,7 @@
   --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
   --accent: #ff7a45; --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
   --div-pos: #3987e5; --div-neg: #e66767; --div-mid: #383835;
-  --good: #0ca30c; --good-text: #4cc94c; --bad: #d03b3b; --bad-text: #ef7d7d;
+  --good: #0ca30c; --good-text: #4cc94c; --bad: #d03b3b; --bad-text: #ef7d7d; --gold-text: #f5c84a;
   --shadow: none;
 }
 
@@ -147,6 +148,11 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .strengths { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
 .strengths .k { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-right: 2px; }
 .strength { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; color: var(--good-text); background: color-mix(in srgb, var(--good) 14%, transparent); border: 1px solid color-mix(in srgb, var(--good) 40%, transparent); }
+.strength.elite { color: var(--gold-text); background: color-mix(in srgb, #fed700 16%, transparent); border-color: color-mix(in srgb, #e0b400 60%, transparent); }
+.strength.exceptional { color: #fff; background: linear-gradient(135deg, #e0a800, #ff8a00); border-color: #ffc400; box-shadow: 0 0 14px -2px #ffb300; animation: shine 2.4s ease-in-out infinite; }
+.strength.exceptional small { color: rgba(255,255,255,.85); }
+@keyframes shine { 50% { box-shadow: 0 0 22px 1px #ffb300; } }
+@media (prefers-reduced-motion: reduce) { .strength.exceptional { animation: none; } }
 .strength small { font-weight: 500; font-size: 11px; color: var(--text-muted); }
 .hero h1 { font-size: 26px; }
 .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; font-size: 13px; }
