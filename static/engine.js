@@ -153,7 +153,7 @@ const Engine = (() => {
     return faceitGet(`/players/${hit.player_id}`, key);
   }
 
-  async function fetchFaceit(ident, cfg) {
+  async function fetchFaceit(ident, cfg, light = false) {
     const key = cfg.faceit_api_key;
     if (!key) return { available: false, reason: SITE_LOCKED_KEY ? "Sign in (top right) to include FACEIT data." : "No FACEIT API key set (⚙ Settings)." };
     let player;
@@ -181,7 +181,7 @@ const Engine = (() => {
     } catch (e) { raw.errors.push(`match stats: ${e.message}`); }
     try { raw.bans = (await faceitGet(`/players/${pid}/bans`, key, { limit: 20 })).items || []; }
     catch { raw.bans = null; } // unknown, not "no bans"
-    raw.halves = await fetchHalves(raw.matches, pid, key);
+    raw.halves = light ? {} : await fetchHalves(raw.matches, pid, key); // light: skip ~60 per-match calls (extension hover cards)
     try { // match history: line-ups with every player's level, start/finish times, match type
       raw.history = [];
       for (const offset of [0, 100]) {
@@ -796,7 +796,7 @@ const Engine = (() => {
   }
 
   /* -------------------------------------------------------------- views --- */
-  async function lookup(q, record = true) {
+  async function lookup(q, record = true, light = false) {
     const cfg = loadConfig();
     if (["demo", "demo-faceit"].includes(q.trim().toLowerCase())) {
       let [fr, lrw] = demoRaw();
@@ -806,7 +806,7 @@ const Engine = (() => {
       return s;
     }
     const ident = resolveQuery(q, cfg);
-    const fc = normalizeFaceit(await fetchFaceit(ident, cfg));
+    const fc = normalizeFaceit(await fetchFaceit(ident, cfg, light));
     const steam64 = ident.steam64 || (fc.available ? fc.steam64 : null);
     if (!steam64) throw new ApiError(404, fc.available ? `FACEIT account "${fc.nickname}" has no CS2 profile linked.` : fc.reason || "Could not determine the player's Steam64 ID.");
     const lt = normalizeLeetify(await fetchLeetify(steam64, cfg), steam64);
@@ -829,7 +829,7 @@ const Engine = (() => {
     const u = new URL(path, "http://x/");
     const body = opts.body ? JSON.parse(opts.body) : {};
     switch (`${opts.method || "GET"} ${u.pathname}`) {
-      case "GET /api/player": return lookup(u.searchParams.get("q") || "", u.searchParams.get("snap") !== "0");
+      case "GET /api/player": return lookup(u.searchParams.get("q") || "", u.searchParams.get("snap") !== "0", u.searchParams.get("light") === "1");
       case "GET /api/tracked": return trackedPlayers();
       case "GET /api/config": return configView();
       case "POST /api/config": {
@@ -880,5 +880,5 @@ const Engine = (() => {
     return s;
   }
 
-  return { handle, exportHistory, importHistory, lockKey, unlock, signOut, rebuild };
+  return { handle, exportHistory, importHistory, lockKey, unlock, signOut, rebuild, faceitGet: (path, params) => faceitGet(path, loadConfig().faceit_api_key, params), hasFaceitKey: () => !!loadConfig().faceit_api_key };
 })();

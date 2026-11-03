@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "CS2 Tracker for FACEIT",
+  "version": "0.1.0",
+  "description": "Hover cards and a map veto helper in FACEIT match rooms – the same stats as your CS2 Tracker site.",
+  "permissions": ["storage", "offscreen"],
+  "host_permissions": [
+    "https://open.faceit.com/*",
+    "https://api-public.cs-prod.leetify.com/*",
+    "https://steamcommunity.com/*",
+    "https://colandreasolling.github.io/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://www.faceit.com/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "CS2 Tracker – settings" }
+}
