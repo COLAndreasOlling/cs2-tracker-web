@@ -663,8 +663,21 @@ const Analysis = (() => {
         mate: "As a teammate: they won't open rounds – plan the early round without them and use them for late flanks and retakes.",
         opp: "As an opponent: expect slow rounds, held angles and late flanks – check behind you after the bomb plant, and don't waste time waiting them out." });
 
+    // aggression scale, 0 = waits behind teammates / plays late, 50 = balanced, 100 = hyper-aggressive
+    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.4], [inv(lin(sig.survival, 25, 42)), 0.25], [lin(sig.tradedOpp, 0.12, 0.30), 0.2], [inv(lin(sig.tradeOpp, 0.25, 0.5)), 0.15]]);
+    let aggression = null;
+    if (aggScore != null) {
+      const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
+      const label = aggScore < 20 ? (behind ? "Baiter" : "Very passive") : aggScore < 35 ? (behind ? "Plays behind teammates" : "Passive")
+        : aggScore < 45 ? "Leans patient" : aggScore <= 55 ? "Balanced" : aggScore <= 65 ? "Leans aggressive" : aggScore <= 80 ? "Aggressive" : "Hyper-aggressive";
+      const tone = "info", reckless = aggScore > 55 && entryWin != null && entryWin < 45;
+      aggression = { score: aggScore, label: reckless ? `${label} – loses the first duel` : label, tone: reckless ? "bad" : tone,
+        why: [...known("First duels per round (~0.20 average)", entryRate, f2), ...known("Opening duels won", entryWin, pct), ...known("Rounds survived", sig.survival, pct),
+          ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Right behind a teammate who dies, per round", sig.tradeOpp, f2)] };
+    }
+
     return {
-      available: true, basis, confidence, traits, ranked, tags, tagScores: { bait, passive },
+      available: true, basis, confidence, traits, ranked, tags, tagScores: { bait, passive }, aggression,
       primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
       secondary: !flexible && !isAwper && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
     };

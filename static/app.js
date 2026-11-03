@@ -302,7 +302,7 @@ function render(d) {
         <span class="muted">Steam64 ${esc(d.steam64)}</span>
         ${lt.available && lt.first_match ? `<span class="muted">Tracked on Leetify since ${new Date(lt.first_match).toLocaleDateString()}</span>` : ""}
       </div>
-      ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span>${tagChips(roleEst.tags)}</div>` : ""}
+      ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span>${aggroMeter(roleEst.aggression)}${tagChips(roleEst.tags)}</div>` : ""}
       <div class="ranks">${ranks.map(([k, v]) => `<div class="rank"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
       ${comp && comp.length ? `<div class="muted" style="margin-top:8px;font-size:12px">Competitive map ranks: ${comp.map((c) => `${esc(c.map)} ${c.rank}`).join(" · ")}</div>` : ""}
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
@@ -520,6 +520,13 @@ function killImpactSection(k, d) {
   </div>`;
 }
 
+/** Aggression meter: bait/passive on the left, hyper-aggressive on the right; hover shows the numbers. */
+function aggroMeter(a) {
+  if (!a) return "";
+  const tip = `Aggression ${a.score}/100 (50 = balanced)\n` + a.why.map((w) => `${w.label}: ${w.value}`).join("\n");
+  return `<span class="aggro ${a.tone}" title="${esc(tip)}"><span class="aggro-ends">Bait</span><span class="aggro-track"><span class="aggro-dot" style="left:${a.score}%"></span></span><span class="aggro-ends">Aggro</span><b>${esc(a.label)}</b></span>`;
+}
+
 /** Playstyle tags (baiting / passive) as small chips; hover shows why and what to expect. */
 function tagChips(tags) {
   return (tags || []).map((t) => `<span class="tagchip ${t.tone}" title="${esc(`${t.detail}
@@ -642,7 +649,7 @@ function renderTeam(t, failed) {
   const roster = t.roster.map((p) => `<div class="card teamcard">
       <a href="?q=${encodeURIComponent(p.d.faceit?.available ? p.d.faceit.nickname : p.d.steam64)}"><b>${esc(p.name)}</b></a>
       <div class="muted" style="font-size:12px">${p.level ? `Lvl ${fmtInt(p.level)}` : ""}${p.elo ? ` · ${fmtInt(p.elo)} ELO` : ""}${p.score != null ? ` · score ${p.score}` : ""}</div>
-      <div class="role-line" style="margin-top:8px"><span class="role-badge">${esc(p.role.available ? p.role.primary.name : "Role unknown")}</span>${tagChips(p.role.tags)}</div>
+      <div class="role-line" style="margin-top:8px"><span class="role-badge">${esc(p.role.available ? p.role.primary.name : "Role unknown")}</span></div><div style="margin-top:6px">${aggroMeter(p.role.aggression)}</div><div class="role-line" style="margin-top:4px">${tagChips(p.role.tags)}</div>
       <div style="font-size:12px;margin-top:8px">${p.impact ? `Kills: <b>${esc(p.impact.name)}</b>` : ""}</div>
       <div style="font-size:12px" class="${formBadge[p.form][1]}">${formBadge[p.form][0]}${p.formDiff != null ? ` (${p.formDiff > 0 ? "+" : ""}${p.formDiff.toFixed(2)} last 10)` : ""}</div>
     </div>`).join("");
