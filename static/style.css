@@ -151,6 +151,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .rank .v { font-weight: 700; font-size: 15px; }
 .score { text-align: center; padding: 0 8px; }
 .score .num { font-size: 52px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
+.score .tier { font-size: 14px; font-weight: 700; margin-top: 8px; }
 .score .lbl { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
 .score-ring { position: relative; width: 120px; height: 120px; display: grid; place-items: center; margin: 0 auto; }
 .score-ring svg { position: absolute; inset: 0; }

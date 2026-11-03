@@ -269,7 +269,6 @@ function render(d) {
     if (lt.total_matches) ranks.push(["Leetify matches", fmtInt(lt.total_matches)]);
   }
   if (fc.available && fc.lifetime.matches) ranks.push(["FACEIT matches", fmtInt(fc.lifetime.matches)]);
-  const comp = lt.available ? lt.ranks.competitive : [];
 
   const score = d.score;
   const ringC = 2 * Math.PI * 52, ringFill = score == null ? 0 : (score / 100) * ringC;
@@ -310,7 +309,6 @@ function render(d) {
       </div>
       ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span>${aggroMeter(roleEst.aggression)}${tagChips(roleEst.tags)}</div>` : ""}
       <div class="ranks">${ranks.map(([k, v]) => `<div class="rank"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
-      ${comp && comp.length ? `<div class="muted" style="margin-top:8px;font-size:12px">Competitive map ranks: ${comp.map((c) => `${esc(c.map)} ${c.rank}`).join(" · ")}</div>` : ""}
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
     </div>
     <div class="score" id="scoreBox" tabindex="0" aria-describedby="tip" aria-label="Performance score ${score ?? "unknown"} out of 100 – hover or focus for the breakdown">
@@ -319,6 +317,7 @@ function render(d) {
         <circle cx="60" cy="60" r="52" fill="none" stroke="${css("--accent")}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${ringFill} ${ringC}" transform="rotate(-90 60 60)"/></svg>
         <div class="num">${score ?? "–"}</div>
       </div>
+      ${score != null ? `<div class="tier ${scoreTier(score).tone}">${scoreTier(score).name}</div>` : ""}
       <div class="lbl">Performance score / 100</div>
     </div>
   </div>
@@ -783,6 +782,10 @@ function prematchSection(d) {
 }
 
 /* ------------------------------------------------- performance score tip --- */
+const SCORE_TIERS = [[30, "Weak", "down"], [42, "Below average", "down"], [58, "Average", ""], [68, "Good", "up"], [78, "Very good", "up"], [88, "Elite", "up"], [Infinity, "Pro level", "up"]];
+/** Plain-word tier for a 0-100 performance score. */
+function scoreTier(v) { const [, name, tone] = SCORE_TIERS.find(([max]) => v < max); return { name, tone }; }
+
 /** The performance score split into its parts for this player (same formula as the engine/server). */
 function scoreParts(d) {
   const clamp = (x) => Math.max(0, Math.min(100, x)), parts = [];
@@ -804,12 +807,13 @@ function scoreTipHtml(d) {
   const { parts, total, skipped } = scoreParts(d);
   if (!parts.length) return `<div class="t">No data for a score yet</div>`;
   const tone = (v) => (v >= 60 ? "up" : v < 40 ? "down" : "");
-  return `<div class="t">Performance score: ${total} / 100</div>
+  return `<div class="t">Performance score: ${total} / 100 – ${scoreTier(total).name}</div>
     <div class="muted" style="margin-bottom:6px">50 is about average. Each part is scored 0–100 and adds its share:</div>
     <table class="scoretip"><thead><tr><th>Part</th><th class="n">Yours</th><th class="n">Score</th><th class="n">Adds</th></tr></thead><tbody>
       ${parts.map((p) => `<tr><td>${esc(p.label)}</td><td class="n">${esc(p.raw)}</td><td class="n ${tone(p.v)}">${Math.round(p.v)}</td><td class="n">+${p.points.toFixed(1)}</td></tr>`).join("")}
       <tr class="sum"><td colspan="3">Total</td><td class="n">${total}</td></tr></tbody></table>
-    <div class="muted" style="margin-top:6px">${skipped ? "Some parts have no data for this player, so the others count for more." : "“Adds” = the part's score × its share of the total; green ≥ 60, red < 40."}</div>`;
+    <div class="muted" style="margin-top:6px">${skipped ? "Some parts have no data for this player, so the others count for more." : "“Adds” = the part's score × its share of the total; green ≥ 60, red < 40."}</div>
+    <div class="muted" style="margin-top:6px">Tiers: under 30 Weak · 30–41 Below average · 42–57 Average · 58–67 Good · 68–77 Very good · 78–87 Elite · 88+ Pro level</div>`;
 }
 
 /** Show `html` in the tooltip on hover, keyboard focus, or a tap (phones). */
