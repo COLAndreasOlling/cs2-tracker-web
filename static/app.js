@@ -204,12 +204,18 @@ const PLATFORMS = [
   ["other", "Other", (m) => !["faceit", "premier", "competitive"].includes(m.source)],
 ];
 try { state.platform = new URLSearchParams(location.search).get("src") || "all"; } catch { state.platform = "all"; }
+const LAST_N = [10, 20, 30, 60, 90, 100];
+try { state.lastN = LAST_N.includes(+new URLSearchParams(location.search).get("last")) ? +new URLSearchParams(location.search).get("last") : 0; } catch { state.lastN = 0; }
 const platformDef = (k) => PLATFORMS.find((p) => p[0] === k) || PLATFORMS[0];
 /** The report for the selected platform (the full data stays in state.data). */
+/** The report for the chosen platform and "last N matches" preset (matches are newest first). */
 function viewOf(d) {
   const [key, , keep] = platformDef(state.platform);
-  if (key === "all" || !d.matches.some(keep)) return d;
-  return Engine.rebuild(d, keep);
+  const onPlatform = key === "all" || !d.matches.some(keep) ? null : keep;
+  if (!onPlatform && !state.lastN) return d;
+  const ms = onPlatform ? d.matches.filter(onPlatform) : d.matches;
+  const pick = new Set(state.lastN ? ms.slice(0, state.lastN) : ms);
+  return Engine.rebuild(d, (m) => pick.has(m));
 }
 function renderView() {
   const y = window.scrollY;
@@ -562,10 +568,15 @@ function roleSection(r) {
 function platformBar() {
   const full = state.data?.matches || [];
   const opts = PLATFORMS.map(([k, label, keep]) => [k, label, k === "all" ? full.length : full.filter(keep).length]).filter(([k, , n]) => k === "all" || n > 0);
-  if (opts.length <= 2) return ""; // only one platform – nothing to switch
   const cur = opts.some(([k]) => k === state.platform) ? state.platform : "all";
-  return `<div class="tabs srcbar" id="srcBar" role="group" aria-label="Platform">${opts.map(([k, label, n]) =>
-    `<button data-src="${k}" class="${k === cur ? "on" : ""}" aria-pressed="${k === cur}">${label} <span class="muted">${n}</span></button>`).join("")}</div>`;
+  const plat = opts.length <= 2 ? "" // only one platform – nothing to switch
+    : `<div class="tabs srcbar" id="srcBar" role="group" aria-label="Platform">${opts.map(([k, label, n]) =>
+      `<button data-src="${k}" class="${k === cur ? "on" : ""}" aria-pressed="${k === cur}">${label} <span class="muted">${n}</span></button>`).join("")}</div>`;
+  const avail = opts.find(([k]) => k === cur)?.[2] ?? full.length;
+  const presets = [0, ...LAST_N.filter((n) => n < avail)];
+  const lastBar = presets.length <= 1 ? "" : `<div class="tabs srcbar" id="lastBar" role="group" aria-label="Matches">${presets.map((n) =>
+    `<button data-last="${n}" class="${n === state.lastN ? "on" : ""}" aria-pressed="${n === state.lastN}">${n ? `Last ${n}` : `All <span class="muted">${avail}</span>`}</button>`).join("")}</div>`;
+  return plat || lastBar ? `<div class="srcbars">${plat}${lastBar}</div>` : "";
 }
 
 function bindPlatformBar() {
@@ -574,6 +585,14 @@ function bindPlatformBar() {
     state.histPage = 0; state.filters.source = ""; // the history's own platform filter would fight the toggle
     const u = new URL(location.href);
     if (state.platform === "all") u.searchParams.delete("src"); else u.searchParams.set("src", state.platform);
+    history.replaceState(null, "", u);
+    renderView();
+  }));
+  $("#lastBar")?.querySelectorAll("[data-last]").forEach((b) => (b.onclick = () => {
+    state.lastN = +b.dataset.last;
+    state.histPage = 0;
+    const u = new URL(location.href);
+    if (state.lastN) u.searchParams.set("last", state.lastN); else u.searchParams.delete("last");
     history.replaceState(null, "", u);
     renderView();
   }));

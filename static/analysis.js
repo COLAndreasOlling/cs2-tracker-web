@@ -680,11 +680,10 @@ const Analysis = (() => {
 
     // aggression scale, 0 = waits behind teammates / plays late, 50 = balanced, 100 = hyper-aggressive
     // last alive: the player still standing when the rest of the team is dead - passive and baiting players end up there often
-    // dying where teammates can trade only counts upwards: dying alone fits a lone entry AND a self-reliant passive player,
-    // so a low value counts as neutral (0.21 is the midpoint of the scale)
-    const tradedUp = sig.tradedOpp == null ? null : lin(Math.max(sig.tradedOpp, 0.21), 0.12, 0.30);
-    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.35], [inv(lin(sig.survival, 25, 42)), 0.2], [tradedUp, 0.15],
-      [inv(lin(sig.tradeOpp, 0.25, 0.5)), 0.15], [inv(lin(sig.lastAlive, 0.025, 0.065)), 0.15]]);
+    // trading: converting the chances to trade a teammate (Leetify counts a trade only within a few seconds) keeps rounds moving
+    const tradeConv = p.trade ?? tradeSuccess;
+    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.3], [inv(lin(sig.survival, 25, 42)), 0.2], [lin(sig.tradedOpp, 0.12, 0.30), 0.15],
+      [inv(lin(sig.tradeOpp, 0.25, 0.5)), 0.1], [inv(lin(sig.lastAlive, 0.025, 0.065)), 0.15], [lin(tradeConv, 35, 65), 0.1]]);
     let aggression = null;
     if (aggScore != null) {
       const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
@@ -697,6 +696,7 @@ const Analysis = (() => {
       aggression = { score: aggScore, label: reckless ? `${label} – loses the first duel` : label, tone: reckless ? "bad" : tone,
         why: [...known("First duels per round (~0.20 average)", entryRate, f2), ...known("Opening duels won", entryWin, pct), ...known("Rounds survived", sig.survival, pct),
           ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Right behind a teammate who dies, per round", sig.tradeOpp, f2),
+          ...known("Trades converted (teammate dies near them, they get the kill back fast)", tradeConv, pct),
           ...known("Grenades per round", sig.util, f2), ...known("Flash assists for teammates per round", sig.flashAssist, f2),
           ...known("Last alive (1v1/1v2), share of rounds", sig.lastAlive == null ? null : 100 * sig.lastAlive, (v) => `${v.toFixed(1)}%`)] };
     }
