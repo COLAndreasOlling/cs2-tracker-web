@@ -556,6 +556,7 @@ const Analysis = (() => {
   };
 
   const ENTRY_AVG = 0.2; // one opening duel per team per round, shared by 5 players
+  const TAG_MIN = 65; // playstyle tags only when the pattern is strong
   const ROLE_MIN = 55; // a role is only named when its score clearly stands out
   const MAP_SHARE_MIN = 0.15; // map tips only for maps that are at least this share of your Active Duty games
   const AWP_SHARE = 0.22; // share of kills with sniper rifles that makes someone the team's AWPer
@@ -639,8 +640,31 @@ const Analysis = (() => {
     if (!isAwper && sniperShare != null && sniperShare >= 0.12) traits.push("Part-time AWPer");
     if (!d.leetify?.available) traits.push("No Leetify data – trade signals unavailable");
 
+    // playstyle tags: how the player spends the early round (no positions or timings in the APIs, so estimates)
+    const tags = [];
+    const quietEarly = inv(lin(entryRate, 0.12, 0.22)); // rarely in the round's first duels
+    const bait = hasTrade ? weighted([[quietEarly, 0.3], [lin(sig.tradeOpp, 0.3, 0.5), 0.3], [inv(lin(sig.tradedOpp, 0.12, 0.25)), 0.2], [lin(sig.survival, 28, 42), 0.2]]) : null;
+    if (!isAwper && bait != null && bait >= TAG_MIN) {
+      const facts = `Rarely first in (${f2(entryRate ?? 0)} first duels per round), often right behind a teammate who dies (${f2(sig.tradeOpp)} trade chances per round), survives ${pct(sig.survival)} of rounds`;
+      if (tradeSuccess != null && tradeSuccess < 45)
+        tags.push({ id: "bait", tone: "bad", name: "Baits without trading", score: bait,
+          detail: `${facts}, but converts only ${pct(tradeSuccess)} of those trades.`,
+          mate: "As a teammate: don't count on the trade – peek with them, not in front of them.",
+          opp: "As an opponent: the first player you kill is often left alone – take the duel, then reposition." });
+      else tags.push({ id: "second", tone: "info", name: "Plays second – trades others", score: bait,
+        detail: `${facts}${tradeSuccess != null ? `, and trades ${pct(tradeSuccess)} of the time` : ""}.`,
+        mate: "As a teammate: feels like baiting, but it pays off – make sure someone else is willing to go first.",
+        opp: "As an opponent: after you get the opening kill, expect them right behind – reset your crosshair for the trade." });
+    }
+    const passive = weighted([[quietEarly, 0.3], [lin(sig.survival, 30, 45), 0.3], [inv(lin(sig.adr, 65, 85)), 0.2], [inv(lin(sig.tradeOpp, 0.2, 0.4)), 0.2]]);
+    if (!isAwper && passive != null && passive >= TAG_MIN)
+      tags.push({ id: "passive", tone: "info", name: "Passive – plays for the late round", score: passive,
+        detail: `Rarely in the first duels (${f2(entryRate ?? 0)} per round), survives ${pct(sig.survival)} of rounds, ${sig.adr != null ? `ADR ${sig.adr.toFixed(0)}` : "low damage"}${sig.tradeOpp != null ? `, often away from teammates (${f2(sig.tradeOpp)} trade chances per round)` : ""} – quiet early, alive late.`,
+        mate: "As a teammate: they won't open rounds – plan the early round without them and use them for late flanks and retakes.",
+        opp: "As an opponent: expect slow rounds, held angles and late flanks – check behind you after the bomb plant, and don't waste time waiting them out." });
+
     return {
-      available: true, basis, confidence, traits, ranked,
+      available: true, basis, confidence, traits, ranked, tags, tagScores: { bait, passive },
       primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
       secondary: !flexible && !isAwper && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
     };
@@ -1129,6 +1153,13 @@ const Analysis = (() => {
     if (ent && ent.fit != null && ent.fit < 40) add(W, "No natural entry", "Nobody takes many first duels.", `Give the entry role to ${ent.player} and back it with flashes – rounds stall without someone going first.`);
     const sup = assignment.find((a) => a.role === "support");
     if (sup && sup.fit != null && sup.fit >= 55) add(S, "A real support player", `${sup.player} uses a lot of utility for the team.`);
+    const tagged = (id) => roster.filter((p) => p.role.tags?.some((t) => t.id === id));
+    const baiters = tagged("bait"), passives = tagged("passive");
+    if (baiters.length) add(W, `Baits without trading: ${baiters.map((p) => p.name).join(", ")}`, "Often right behind a teammate who dies, but rarely gets the trade.",
+      "Pair them with someone who calls the peek – swing together, not one after the other. Against you: take the first duel, the trade often doesn't come.");
+    if (passives.length >= 2) add(W, `Slow line-up: ${passives.map((p) => p.name).join(", ")}`, `${passives.length} players who stay quiet early and play for the late round.`,
+      "Expect long rounds and late rotations. With you: someone has to open rounds – decide who. Against you: don't wait them out; take map control early and watch for late flanks.");
+    else if (passives.length === 1) add(S, `Late-round player: ${passives[0].name}`, "Stays alive and plays for the end of the round.", "Use them for late flanks, lurks and retakes rather than early contact.");
     const hot = roster.filter((p) => p.form === "hot"), cold = roster.filter((p) => p.form === "cold");
     if (hot.length) add(S, `In form: ${hot.map((p) => p.name).join(", ")}`, "Their last 10 matches are clearly above their average.", "Play through them: give them the impactful positions this session.");
     if (cold.length) add(W, `Out of form: ${cold.map((p) => p.name).join(", ")}`, "Their last 10 matches are clearly below their average.", "Give them a simpler, supportive role for now – and no blame. Form comes back.");
