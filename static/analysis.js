@@ -702,10 +702,23 @@ const Analysis = (() => {
     // trade attempts: real players swing for ~85% of trade chances (median match 89%, bottom 10% ~62%)
     // snowball: non-clutch multi-kill share of kill-rounds vs the KPR expectation, so better aim alone doesn't count as aggression
     const AGG_WEIGHTS = { entry: 0.2, survival: 0.15, traded: 0.15, behind: 0.1, lastAlive: 0.1, tradeConv: 0.1, tradeAtt: 0.1, snowball: 0.1 };
-    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), AGG_WEIGHTS.entry], [inv(lin(sig.survival, 25, 42)), AGG_WEIGHTS.survival],
-      [lin(sig.tradedOpp, 0.12, 0.30), AGG_WEIGHTS.traded], [inv(lin(sig.tradeOpp, 0.25, 0.5)), AGG_WEIGHTS.behind],
-      [inv(lin(sig.lastAlive, 0.025, 0.065)), AGG_WEIGHTS.lastAlive], [lin(tradeConv, 35, 65), AGG_WEIGHTS.tradeConv],
-      [lin(sig.tradeAtt, 70, 95), AGG_WEIGHTS.tradeAtt], [lin(sig.snowball?.diff, -5, 5), AGG_WEIGHTS.snowball]]);
+    const fmt = (v, f) => (v == null || Number.isNaN(v) ? null : f(v));
+    const aggSignals = [
+      ["First duels per round", fmt(entryRate, f2), lin(entryRate, 0.12, 0.30), AGG_WEIGHTS.entry, "0.12 → 0.30"],
+      ["Rounds survived", fmt(sig.survival, pct), inv(lin(sig.survival, 25, 42)), AGG_WEIGHTS.survival, "42% → 25%"],
+      ["Dies where teammates can trade, per round", fmt(sig.tradedOpp, f2), lin(sig.tradedOpp, 0.12, 0.30), AGG_WEIGHTS.traded, "0.12 → 0.30"],
+      ["Right behind a teammate who dies, per round", fmt(sig.tradeOpp, f2), inv(lin(sig.tradeOpp, 0.25, 0.5)), AGG_WEIGHTS.behind, "0.50 → 0.25"],
+      ["Last alive (1v1/1v2), share of rounds", fmt(sig.lastAlive, (v) => `${(100 * v).toFixed(1)}%`), inv(lin(sig.lastAlive, 0.025, 0.065)), AGG_WEIGHTS.lastAlive, "6.5% → 2.5%"],
+      ["Trades converted", fmt(tradeConv, pct), lin(tradeConv, 35, 65), AGG_WEIGHTS.tradeConv, "35% → 65%"],
+      ["Swings for the trade", fmt(sig.tradeAtt, pct), lin(sig.tradeAtt, 70, 95), AGG_WEIGHTS.tradeAtt, "70% → 95%"],
+      ["Multi-kills outside clutches vs expected", fmt(sig.snowball?.diff, (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)} pts`), lin(sig.snowball?.diff, -5, 5), AGG_WEIGHTS.snowball, "−5 → +5 pts"],
+    ];
+    const aggW = sum(aggSignals.filter(([, , v]) => v != null).map(([, , , w]) => w));
+    // points: each signal's share of the score (they add up to it); push: how far it moves the score from 50 (balanced)
+    const aggParts = aggSignals.map(([label, raw, v, w, range]) => (v == null || aggW < 0.5
+      ? { label, raw, range, points: null, max: null, push: null }
+      : { label, raw, range, points: (100 * v * w) / aggW, max: (100 * w) / aggW, push: (100 * (v - 0.5) * w) / aggW }));
+    const aggScore = aggW >= 0.5 ? Math.round(sum(aggParts.filter((x) => x.points != null).map((x) => x.points))) : null;
     let aggression = null;
     if (aggScore != null) {
       const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
@@ -716,13 +729,8 @@ const Analysis = (() => {
         : aggScore < 45 ? "Leans patient" : aggScore <= 55 ? "Balanced" : aggScore <= 65 ? "Leans aggressive" : aggScore <= 80 ? "Aggressive" : "Hyper-aggressive";
       const tone = "info", reckless = aggScore > 55 && entryWin != null && entryWin < 45;
       aggression = { score: aggScore, label: reckless ? `${label} – loses the first duel` : label, tone: reckless ? "bad" : tone,
-        why: [...known("First duels per round (~0.20 average)", entryRate, f2), ...known("Opening duels won", entryWin, pct), ...known("Rounds survived", sig.survival, pct),
-          ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Right behind a teammate who dies, per round", sig.tradeOpp, f2),
-          ...known("Trades converted (teammate dies near them, they get the kill back fast)", tradeConv, pct),
-          ...known("Swings for the trade (share of trade chances)", sig.tradeAtt, pct),
-          ...known("Multi-kill rounds outside clutches vs expected for their kill rate", sig.snowball?.diff, (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)} pts (${sig.snowball.share.toFixed(0)}% vs ${sig.snowball.expected.toFixed(0)}%)`),
-          ...known("Grenades per round", sig.util, f2), ...known("Flash assists for teammates per round", sig.flashAssist, f2),
-          ...known("Last alive (1v1/1v2), share of rounds", sig.lastAlive == null ? null : 100 * sig.lastAlive, (v) => `${v.toFixed(1)}%`)] };
+        parts: aggParts,
+        info: [...known("Opening duels won", entryWin, pct), ...known("Grenades per round", sig.util, f2), ...known("Flash assists for teammates per round", sig.flashAssist, f2)] };
     }
 
     return {

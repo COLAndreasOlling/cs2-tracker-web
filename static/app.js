@@ -408,7 +408,7 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d); bindPlatformBar();
+  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d); bindPlatformBar(); bindAggroTips($("#report"));
   { const k = Analysis.killImpact(d); if (k.available) bindHoverTip($("#killVerdict"), killTipHtml(k)); }
   setupPages(d);
 }
@@ -527,10 +527,28 @@ function killImpactSection(k, d) {
 }
 
 /** Aggression meter: bait/passive on the left, hyper-aggressive on the right; hover shows the numbers. */
+const AGG_TIPS = [];
 function aggroMeter(a) {
   if (!a) return "";
-  const tip = `Aggression ${a.score}/100 (50 = balanced)\n` + a.why.map((w) => `${w.label}: ${w.value}`).join("\n");
-  return `<span class="aggro ${a.tone}" title="${esc(tip)}"><span class="aggro-ends">Bait</span><span class="aggro-track"><span class="aggro-dot" style="left:${a.score}%"></span></span><span class="aggro-ends">Aggro</span><b>${esc(a.label)}</b></span>`;
+  AGG_TIPS.push(aggroTipHtml(a));
+  return `<span class="aggro ${a.tone}" tabindex="0" data-aggtip="${AGG_TIPS.length - 1}"><span class="aggro-ends">Bait</span><span class="aggro-track"><span class="aggro-dot" style="left:${a.score}%"></span></span><span class="aggro-ends">Aggro</span><b>${esc(a.label)}</b></span>`;
+}
+
+/** The meter's breakdown: each signal's points (they add up to the score) and how far it pushes from balanced. */
+function aggroTipHtml(a) {
+  const used = a.parts.filter((p) => p.points != null), missing = a.parts.filter((p) => p.points == null);
+  const push = (v) => `<td class="n ${v >= 1 ? "up" : v <= -1 ? "down" : "muted"}">${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(1)}</td>`;
+  return `<div class="t">Aggression: ${a.score} / 100 – ${esc(a.label)}</div>
+    <div class="muted" style="margin-bottom:6px">50 is balanced. Each signal adds up to its max; “Push” is how far it moves the score from balanced (+ aggressive, − passive).</div>
+    <table class="scoretip"><thead><tr><th>Signal</th><th class="n">Theirs</th><th class="n">Points</th><th class="n">Push</th></tr></thead><tbody>
+      ${used.map((p) => `<tr><td>${esc(p.label)}</td><td class="n">${esc(p.raw)}</td><td class="n">${p.points.toFixed(1)} <span class="muted">/ ${p.max.toFixed(1)}</span></td>${push(p.push)}</tr>
+        <tr class="refrow"><td colspan="4">passive → aggressive: ${esc(p.range)}</td></tr>`).join("")}
+      <tr class="sum"><td colspan="2">Total</td><td class="n">${a.score}</td>${push(a.score - 50)}</tr></tbody></table>
+    ${missing.length ? `<div class="muted" style="margin-top:6px">No data, left out (the others count for more): ${missing.map((p) => esc(p.label)).join(", ")}</div>` : ""}
+    ${a.info.length ? `<div class="muted" style="margin-top:6px">Not counted, for context: ${a.info.map((w) => `${esc(w.label)} ${esc(w.value)}`).join(" · ")}</div>` : ""}`;
+}
+function bindAggroTips(root) {
+  root?.querySelectorAll("[data-aggtip]").forEach((el) => bindHoverTip(el, AGG_TIPS[+el.dataset.aggtip]));
 }
 
 /** Playstyle tags (baiting / passive) as small chips; hover shows why and what to expect. */
@@ -656,6 +674,7 @@ async function analyzeTeam(names) {
   }
   if (players.length < 2) { out.innerHTML = `<div class="error">Couldn't load enough players.<br>${failed.map(esc).join("<br>")}</div>`; return; }
   out.innerHTML = renderTeam(Analysis.team(players), failed);
+  bindAggroTips(out);
 }
 
 function renderTeam(t, failed) {
