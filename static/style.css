@@ -168,6 +168,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .form.hot { color: #fff; background: linear-gradient(135deg, #ff6a00, #e8340c); border-color: #ff7a2e; }
 .form.hot small { color: rgba(255,255,255,.85); }
 .form.poor { color: var(--bad-text); border-color: color-mix(in srgb, var(--bad) 40%, transparent); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.inv { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); cursor: help; }
+.inv small { font-weight: 500; font-size: 11px; color: var(--text-muted); }
+.inv.rich { color: var(--gold-text); border-color: color-mix(in srgb, #e0b400 50%, transparent); }
 .strength small { font-weight: 500; font-size: 11px; color: var(--text-muted); }
 .hero h1 { font-size: 26px; }
 .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; font-size: 13px; }

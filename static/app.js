@@ -308,7 +308,7 @@ function render(d) {
         ${lt.available && lt.first_match ? `<span class="muted">Tracked on Leetify since ${new Date(lt.first_match).toLocaleDateString()}</span>` : ""}
       </div>
       ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span>${aggroMeter(roleEst.aggression)}${tagChips(roleEst.tags)}</div>` : ""}
-      ${formHtml(state.data || d)}${strengthsHtml(d)}
+      ${formHtml(state.data || d)}${strengthsHtml(d)}${inventorySlot(d)}
       <div class="ranks">${ranks.map(([k, v]) => `<div class="rank"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
     </div>
@@ -408,7 +408,7 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d); bindPlatformBar(); bindAggroTips($("#report"));
+  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d); bindPlatformBar(); bindAggroTips($("#report")); loadInventory(d);
   { const k = Analysis.killImpact(d); if (k.available) bindHoverTip($("#killVerdict"), killTipHtml(k)); }
   setupPages(d);
 }
@@ -845,6 +845,43 @@ function currentForm(d) {
 function formHtml(d) {
   const f = currentForm(d);
   return f ? `<div class="strengths"><span class="k">Form</span><span class="form ${f.tone}" title="${esc(f.basis)}">${esc(f.label)}<small>${esc(f.detail)}</small></span></div>` : "";
+}
+
+/* ------------------------------------------------------- inventory value --- */
+// Items come from the Cloudflare Worker in worker/inventory-proxy.js (Steam blocks browsers),
+// prices from prices.json, which a daily GitHub Action builds from SkinsTrack (Steam Market prices).
+const INV_PROXY = ((window.CS2_CONFIG && window.CS2_CONFIG.inventoryProxy) || "").replace(/\/$/, "");
+let pricesP = null;
+const loadPrices = () => (pricesP ||= fetch("prices.json").then((r) => (r.ok ? r.json() : null)).catch(() => null));
+const invCache = new Map();
+const usd = (v) => `$${v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2)}`;
+
+const inventorySlot = (d) => (INV_PROXY && !d.demo ? `<div class="strengths" id="invRow"><span class="k">Inventory</span><span class="inv muted">checking…</span></div>` : "");
+
+async function loadInventory(d) {
+  if (!INV_PROXY || d.demo) return;
+  const id = d.steam64;
+  if (!invCache.has(id)) invCache.set(id, Promise.all([
+    fetch(`${INV_PROXY}/inventory/${id}`).then((r) => r.json()).catch(() => ({ status: "error" })), loadPrices()]));
+  const [inv, pr] = await invCache.get(id);
+  const row = $("#invRow");
+  if (!row || state.data?.steam64 !== id) return; // another player was opened meanwhile
+  if (inv.status !== "ok") invCache.delete(id); // retry next time
+  const chip = (cls, html) => { row.innerHTML = `<span class="k">Inventory</span><span class="inv ${cls}" tabindex="0">${html}</span>`; return row.lastElementChild; };
+  if (inv.status === "private") return chip("muted", "Private");
+  if (inv.status !== "ok") return chip("muted", inv.status === "busy" ? "Steam is busy – try again in a minute" : "Couldn't load");
+  const count = inv.items.reduce((a, x) => a + x.count, 0);
+  if (!pr || !pr.prices) return chip("", `${fmtInt(count)} items<small>no prices yet</small>`);
+  const priced = inv.items.map((x) => ({ ...x, each: pr.prices[x.name] })).filter((x) => x.each != null)
+    .map((x) => ({ ...x, total: x.each * x.count })).sort((a, b) => b.total - a.total);
+  const total = priced.reduce((a, x) => a + x.total, 0);
+  const el = chip(total >= 1000 ? "rich" : "", `≈ ${usd(total)}<small>${fmtInt(count)} items</small>`);
+  const top = priced.slice(0, 5);
+  bindHoverTip(el, `<div class="t">Inventory ≈ ${usd(total)}</div>
+    <div class="muted" style="margin-bottom:6px">${fmtInt(count)} items, ${fmtInt(priced.reduce((a, x) => a + x.count, 0))} with a market price.</div>
+    ${top.length ? `<table class="scoretip"><thead><tr><th>Most valuable</th><th class="n">Price</th></tr></thead><tbody>
+      ${top.map((x) => `<tr><td>${esc(x.name)}${x.count > 1 ? ` ×${x.count}` : ""}</td><td class="n">${usd(x.total)}</td></tr>`).join("")}</tbody></table>` : ""}
+    <div class="muted" style="margin-top:6px">Lowest Steam Market listing (via SkinsTrack), updated ${esc(pr.updated || "?")}. Float, stickers on skins and patterns aren't priced in.</div>`);
 }
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };

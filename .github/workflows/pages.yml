@@ -7,6 +7,9 @@ on:
     branches: [main]
     paths: ["static/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
+  workflow_run: # redeploy after the daily price update
+    workflows: ["Update prices"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -33,10 +36,19 @@ jobs:
         env:
           FACEIT_CLIENT_KEY: ${{ secrets.FACEIT_CLIENT_KEY }}
           FACEIT_KEY_LOCKED: ${{ secrets.FACEIT_KEY_LOCKED }}
+          INVENTORY_PROXY: ${{ vars.INVENTORY_PROXY_URL }}
         run: |
-          jq -n --arg c "$FACEIT_CLIENT_KEY" --arg l "$FACEIT_KEY_LOCKED" '{faceitApiKey: $c, faceitKeyLocked: $l}' \
+          jq -n --arg c "$FACEIT_CLIENT_KEY" --arg l "$FACEIT_KEY_LOCKED" --arg i "$INVENTORY_PROXY" '{faceitApiKey: $c, faceitKeyLocked: $l, inventoryProxy: $i}' \
             | { printf 'window.CS2_CONFIG = '; cat; printf ';\n'; } > static/config.js
           echo "client key: $([ -n "$FACEIT_CLIENT_KEY" ] && echo set || echo none) | locked key: $([ -n "$FACEIT_KEY_LOCKED" ] && echo set || echo none)"
+      # Item prices from the `prices` branch (see prices.yml); without them inventories show item counts only.
+      - name: Add prices
+        run: |
+          if git fetch -q origin prices; then
+            jq -cs --arg u "$(git log -1 --format=%cs origin/prices)" '{updated: $u, currency: "USD", prices: (.[0] + .[1])}' \
+              <(git show origin/prices:items.json) <(git show origin/prices:stickers.json) > static/prices.json
+            echo "prices: $(jq '.prices | length' static/prices.json)"
+          else echo "no prices branch yet"; fi
       # Cache-busting: each deploy gets new asset URLs, so browsers load the update without Ctrl+F5.
       - name: Stamp asset version
         run: sed -i "s/__BUILD__/${GITHUB_SHA::8}/g" static/index.html

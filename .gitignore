@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 data/halves.json
 data/matchstats_v2.json
+static/prices.json
+mock/

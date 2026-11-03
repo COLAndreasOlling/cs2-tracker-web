@@ -6,5 +6,7 @@
  * faceitApiKey: a plain FACEIT "Client side" key (secret FACEIT_CLIENT_KEY), readable by
  *   every visitor. Never put a Server side key here - lock it instead.
  *
+ * inventoryProxy: URL of the Cloudflare Worker in worker/inventory-proxy.js (repo variable INVENTORY_PROXY_URL).
+ *
  * A key a visitor saves in ⚙ Settings overrides both. */
-window.CS2_CONFIG = { faceitApiKey: "", faceitKeyLocked: "" };
+window.CS2_CONFIG = { faceitApiKey: "", faceitKeyLocked: "", inventoryProxy: "http://localhost:8766/mock" };
