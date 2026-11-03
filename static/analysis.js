@@ -671,15 +671,27 @@ const Analysis = (() => {
         detail: `Rarely in the first duels (${f2(entryRate ?? 0)} per round), survives ${pct(sig.survival)} of rounds, ${sig.adr != null ? `ADR ${sig.adr.toFixed(0)}` : "low damage"}${sig.tradeOpp != null ? `, often away from teammates (${f2(sig.tradeOpp)} trade chances per round)` : ""} – quiet early, alive late.`,
         mate: "As a teammate: they won't open rounds – plan the early round without them and use them for late flanks and retakes.",
         opp: "As an opponent: expect slow rounds, held angles and late flanks – check behind you after the bomb plant, and don't waste time waiting them out." });
+    // self-reliant: dies away from the team, keeps utility, rarely opens rounds - trusts nobody to trade
+    if (!isAwper && !tags.some((t) => t.id === "bait") && sig.tradedOpp != null && sig.tradedOpp < 0.15 && selfishUtil && quietEarly != null && quietEarly >= 0.5)
+      tags.push({ id: "lone", tone: "bad", name: "Lone wolf – plays for themselves", score: null,
+        detail: `Dies where no teammate can trade (${f2(sig.tradedOpp)} per round), rarely takes first duels (${f2(entryRate ?? 0)} per round) and keeps utility to themselves (${f2(sig.util)} grenades, ${f2(sig.flashAssist)} flash assists per round).`,
+        mate: "As a teammate: don't build the round around them – they play their own angle. Ask for one flash or one info call per round.",
+        opp: "As an opponent: they're often isolated – find them alone and they have no trade behind them." });
 
     // aggression scale, 0 = waits behind teammates / plays late, 50 = balanced, 100 = hyper-aggressive
     // last alive: the player still standing when the rest of the team is dead - passive and baiting players end up there often
-    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.35], [inv(lin(sig.survival, 25, 42)), 0.2], [lin(sig.tradedOpp, 0.12, 0.30), 0.15],
+    // dying where teammates can trade only counts upwards: dying alone fits a lone entry AND a self-reliant passive player,
+    // so a low value counts as neutral (0.21 is the midpoint of the scale)
+    const tradedUp = sig.tradedOpp == null ? null : lin(Math.max(sig.tradedOpp, 0.21), 0.12, 0.30);
+    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.35], [inv(lin(sig.survival, 25, 42)), 0.2], [tradedUp, 0.15],
       [inv(lin(sig.tradeOpp, 0.25, 0.5)), 0.15], [inv(lin(sig.lastAlive, 0.025, 0.065)), 0.15]]);
     let aggression = null;
     if (aggScore != null) {
       const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
-      const label = aggScore < 20 ? (behind ? (selfishUtil ? "Baiter" : "Plays behind teammates") : "Very passive") : aggScore < 35 ? (behind ? (selfishUtil ? "Leans baiter" : "Plays behind teammates") : "Passive")
+      // away from the team (dies where nobody can trade) with utility kept to themselves: plays for themselves
+      const alone = sig.tradedOpp != null && sig.tradedOpp < 0.15 && selfishUtil;
+      const label = aggScore < 20 ? (behind ? (selfishUtil ? "Baiter" : "Plays behind teammates") : alone ? "Lone wolf – plays for themselves" : "Very passive")
+        : aggScore < 35 ? (behind ? (selfishUtil ? "Leans baiter" : "Plays behind teammates") : alone ? "Lone wolf – plays for themselves" : "Passive")
         : aggScore < 45 ? "Leans patient" : aggScore <= 55 ? "Balanced" : aggScore <= 65 ? "Leans aggressive" : aggScore <= 80 ? "Aggressive" : "Hyper-aggressive";
       const tone = "info", reckless = aggScore > 55 && entryWin != null && entryWin < 45;
       aggression = { score: aggScore, label: reckless ? `${label} – loses the first duel` : label, tone: reckless ? "bad" : tone,
