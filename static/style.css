@@ -143,6 +143,12 @@ main { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .hero { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 20px; align-items: center; }
 @media (max-width: 760px) { .hero { grid-template-columns: minmax(0, 1fr); } }
 .avatar { width: 76px; height: 76px; border-radius: 14px; background: var(--surface-2); object-fit: cover; display: grid; place-items: center; font-size: 30px; font-weight: 700; color: var(--text-muted); }
+.hero.edged { border: 2px solid var(--edge); box-shadow: 0 0 0 1px color-mix(in srgb, var(--edge) 25%, transparent), 0 0 24px -8px var(--edge); }
+.strengths { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.strengths .k { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; margin-right: 2px; }
+.strength { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; font-weight: 700; font-size: 13px; color: var(--good-text); background: color-mix(in srgb, var(--good) 14%, transparent); border: 1px solid color-mix(in srgb, var(--good) 40%, transparent); }
+.strength small { font-weight: 500; font-size: 11px; color: var(--text-muted); }
+.strength.plain { color: var(--text); background: var(--surface-2); border-color: var(--border); }
 .hero h1 { font-size: 26px; }
 .links { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; font-size: 13px; }
 .ranks { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }

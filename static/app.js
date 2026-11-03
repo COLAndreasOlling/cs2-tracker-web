@@ -296,7 +296,7 @@ function render(d) {
       ${id.avatar ? `<img src="${esc(id.avatar)}" alt="">` : ""}<b>${esc(id.name)}</b>${level ? `<span class="muted">${esc(level)}</span>` : ""}${score != null ? `<span class="muted">Score ${score}</span>` : ""}
     </div>
   </nav>
-  <div class="card hero">
+  <div class="card hero${rankEdge(d) ? " edged" : ""}"${rankEdge(d) ? ` style="--edge:${rankEdge(d).color}" title="${esc(rankEdge(d).why)}"` : ""}>
     ${id.avatar ? `<img class="avatar" src="${esc(id.avatar)}" alt="">` : `<div class="avatar">${esc((id.name || "?")[0].toUpperCase())}</div>`}
     <div>
       <h1>${esc(id.name)} ${id.country ? `<span class="muted" style="font-size:14px;font-weight:500">${esc(id.country.toUpperCase())}</span>` : ""}</h1>
@@ -308,6 +308,7 @@ function render(d) {
         ${lt.available && lt.first_match ? `<span class="muted">Tracked on Leetify since ${new Date(lt.first_match).toLocaleDateString()}</span>` : ""}
       </div>
       ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span>${aggroMeter(roleEst.aggression)}${tagChips(roleEst.tags)}</div>` : ""}
+      ${strengthsHtml(d)}
       <div class="ranks">${ranks.map(([k, v]) => `<div class="rank"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
     </div>
@@ -779,6 +780,47 @@ function prematchSection(d) {
       ])}
     </div>
   </div>`;
+}
+
+/* ------------------------------------------------- strengths & rank edge --- */
+/** What this player is clearly above average at: up to 3, each scored like the performance score (50 = average). */
+function strengths(d) {
+  const r = d.leetify.available ? d.leetify.rating || {} : {}, o = d.overall || {}, c = [];
+  const add = (label, raw, v) => { if (v != null && isFinite(v)) c.push({ label, raw, v }); };
+  if (r.aim != null) add("Aim", `Leetify ${r.aim.toFixed(0)}`, r.aim);
+  if (r.positioning != null) add("Positioning", `Leetify ${r.positioning.toFixed(0)}`, r.positioning);
+  if (r.utility != null) add("Utility", `Leetify ${r.utility.toFixed(0)}`, r.utility);
+  if (r.opening != null) add("Opening duels", `Leetify ${signed(r.opening, 1)}`, 50 + r.opening * 8);
+  if (r.clutch != null) add("Clutches", `Leetify ${signed(r.clutch, 1)}`, 50 + r.clutch * 8);
+  if (o.kd != null) add("Fragging", `K/D ${o.kd.toFixed(2)}`, 50 + (o.kd - 1) * 100);
+  if (o.adr != null) add("Damage", `ADR ${o.adr.toFixed(0)}`, 50 + (o.adr - 77) * 2);
+  if (o.hs != null) add("Headshots", `${Math.round(o.hs)}% HS`, 50 + (o.hs - 45) * 2.5);
+  if (o.winrate != null && (o.matches || 0) >= 10) add("Winning games", `${Math.round(o.winrate)}% wins`, o.winrate * 1.25 - 12.5);
+  if (r.ct != null && r.t != null && Math.abs(r.ct - r.t) >= 2.5) add(r.ct > r.t ? "CT side" : "T side", `Leetify ${signed(Math.max(r.ct, r.t), 1)} vs ${signed(Math.min(r.ct, r.t), 1)}`, 50 + Math.abs(r.ct - r.t) * 4);
+  const maps = (d.map_pool || []).filter((m) => (m.recent.matches || 0) >= 5 && m.recent.winrate != null && o.winrate != null && m.recent.winrate >= Math.max(55, o.winrate + 10));
+  const best = maps.sort((a, b) => b.recent.winrate - a.recent.winrate)[0];
+  if (best) add(`${best.map}`, `${Math.round(best.recent.winrate)}% wins in ${best.recent.matches}`, 50 + (best.recent.winrate - o.winrate) * 1.2);
+  c.sort((a, b) => b.v - a.v);
+  const top = c.filter((x) => x.v >= 62).slice(0, 3);
+  return { top, best: top.length ? null : c[0] || null };
+}
+
+function strengthsHtml(d) {
+  const { top, best } = strengths(d);
+  if (top.length) return `<div class="strengths"><span class="k">Strong at</span>${top.map((x) => `<span class="strength" title="${esc(x.raw)}">${esc(x.label)}<small>${esc(x.raw)}</small></span>`).join("")}</div>`;
+  return best ? `<div class="strengths"><span class="k">No standout strength yet · best area</span><span class="strength plain">${esc(best.label)}<small>${esc(best.raw)}</small></span></div>` : "";
+}
+
+const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };
+const PREMIER_COLORS = [[5000, "#b0c3d9"], [10000, "#8cc6ff"], [15000, "#6a7dff"], [20000, "#c166ff"], [25000, "#f03cff"], [30000, "#eb4b4b"], [Infinity, "#fed700"]];
+/** Border colour for the player block: FACEIT level colours (one skill ladder for everyone); Premier tier colours if no FACEIT level. */
+function rankEdge(d) {
+  const fc = d.faceit || {}, lt = d.leetify || {};
+  const lvl = fc.available ? fc.level : lt.available ? lt.ranks.faceit : null;
+  if (lvl) return { color: FACEIT_LVL_COLORS[Math.max(1, Math.min(10, lvl))], why: `Border: FACEIT level ${lvl} colour` };
+  const pr = lt.available ? lt.ranks.premier : null;
+  if (pr) return { color: PREMIER_COLORS.find(([max]) => pr < max)[1], why: `Border: Premier ${pr} tier colour (no FACEIT level)` };
+  return null;
 }
 
 /* ------------------------------------------------- performance score tip --- */
