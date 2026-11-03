@@ -849,7 +849,7 @@ function formHtml(d) {
 
 /* ------------------------------------------------------- inventory value --- */
 // Items come from the Cloudflare Worker in worker/inventory-proxy.js (Steam blocks browsers),
-// prices from prices.json, which a daily GitHub Action builds from SkinsTrack (Steam Market prices).
+// prices from prices.json, which a daily GitHub Action builds from Skinport's public price list.
 const INV_PROXY = ((window.CS2_CONFIG && window.CS2_CONFIG.inventoryProxy) || "").replace(/\/$/, "");
 let pricesP = null;
 const loadPrices = () => (pricesP ||= fetch("prices.json").then((r) => (r.ok ? r.json() : null)).catch(() => null));
@@ -881,7 +881,7 @@ async function loadInventory(d) {
     <div class="muted" style="margin-bottom:6px">${fmtInt(count)} items, ${fmtInt(priced.reduce((a, x) => a + x.count, 0))} with a market price.</div>
     ${top.length ? `<table class="scoretip"><thead><tr><th>Most valuable</th><th class="n">Price</th></tr></thead><tbody>
       ${top.map((x) => `<tr><td>${esc(x.name)}${x.count > 1 ? ` ×${x.count}` : ""}</td><td class="n">${usd(x.total)}</td></tr>`).join("")}</tbody></table>` : ""}
-    <div class="muted" style="margin-top:6px">Lowest Steam Market listing (via SkinsTrack), updated ${esc(pr.updated || "?")}. Float, stickers on skins and patterns aren't priced in.</div>`);
+    <div class="muted" style="margin-top:6px">Lowest Skinport listing, updated ${esc(pr.updated || "?")}. Float, stickers on skins and patterns aren't priced in.</div>`);
 }
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };

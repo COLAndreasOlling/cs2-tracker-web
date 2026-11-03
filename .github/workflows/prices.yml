@@ -1,6 +1,5 @@
-# Fetches CS2 item prices from SkinsTrack once a day and stores them on the `prices` branch.
-# The Pages deploy copies them to static/prices.json, so the key never reaches a browser.
-# Free SkinsTrack keys allow 50 requests a month: items daily (~31) + stickers on Mondays (~5).
+# Fetches CS2 item prices from Skinport's public API (no account or key) once a day and stores
+# them on the `prices` branch; the Pages deploy copies them to static/prices.json.
 name: Update prices
 
 on:
@@ -18,26 +17,17 @@ concurrency:
 jobs:
   prices:
     runs-on: ubuntu-latest
-    env:
-      KEY: ${{ secrets.SKINSTRACK_API_KEY }}
     steps:
-      - name: Check key
-        run: if [ -z "$KEY" ]; then echo "No SKINSTRACK_API_KEY secret – nothing to do."; fi
-      - uses: actions/checkout@v4
-        if: env.KEY != ''
       - name: Fetch prices
-        if: env.KEY != ''
         run: |
           set -euo pipefail
           mkdir -p out
-          git fetch origin prices && git show origin/prices:stickers.json > out/stickers.json || true
-          get() { curl -sfS --retry 2 -H "x-api-key: $KEY" "https://api.skinstrack.com/v2/free/$1" \
-            | jq -c --arg k "$1" '[.[$k][] | select(.prices | length > 0) | {key: .market_hash_name, value: ([.prices[].price] | min)}] | from_entries'; }
-          get items > out/items.json
-          if [ "$(date -u +%u)" = "1" ] || [ ! -s out/stickers.json ]; then get stickers > out/stickers.json; fi
-          echo "items: $(jq length out/items.json) | stickers: $(jq length out/stickers.json)"
+          # lowest current listing; items with no listings fall back to Skinport's suggested price
+          curl -sfS --retry 3 --compressed -H "Accept-Encoding: br, gzip" "https://api.skinport.com/v1/items?app_id=730&currency=USD" \
+            | jq -c '[.[] | {key: .market_hash_name, value: (.min_price // .suggested_price)} | select(.value != null)] | from_entries' > out/items.json
+          echo '{}' > out/stickers.json
+          echo "items: $(jq length out/items.json)"
       - name: Save to prices branch
-        if: env.KEY != ''
         run: |
           cd out && git init -q && git checkout -q -b prices
           git add . && git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com commit -qm "Prices $(date -u +%F)"
