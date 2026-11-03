@@ -197,6 +197,23 @@ const Analysis = (() => {
       util_dmg: per((m) => fxOf(m)?.util_dmg), // FACEIT: utility damage per round
       util_death: mean(e("util_on_death")),
       trade: ratio(100 * sum(e("trade_succ")), sum(e("trade_opps"))),
+      // swings for the trade at all (Leetify: shot at the killer), whether or not it lands
+      trade_att: (() => { const s = pairSum(ex, (m) => m.ext.trade_att, (m) => m.ext.trade_opps); return s && s.b >= 20 ? (100 * s.a) / s.b : null; })(),
+      // multi-kill rounds that aren't clutches, vs what the kill rate predicts (kill-impact calibration: 11.5% + 34% × KPR of kill-rounds).
+      // FACEIT clutch kills beyond 1v1 wins, at 2 per round, estimate the clutch multi-kill rounds to take out.
+      snowball: (() => {
+        let multi = 0, killRounds = 0, kills = 0, rounds = 0, n = 0;
+        for (const m of rows) {
+          const s = m.faceit_stats || m, fx = fxOf(m);
+          if (!s.multi || !s.rounds || fx?.clutch_kills == null) continue;
+          const clutchMulti = Math.max(0, (fx.clutch_kills - (fx.v1_wins || 0)) / 2);
+          multi += Math.max(0, s.multi[1] + s.multi[2] + s.multi[3] + s.multi[4] - clutchMulti);
+          killRounds += sum(s.multi); kills += s.kills; rounds += s.rounds; n++;
+        }
+        if (n < 5 || !killRounds) return null;
+        const share = multi / killRounds, expected = 0.115 + 0.34 * (kills / rounds);
+        return { share: 100 * share, expected: 100 * expected, diff: 100 * (share - expected), perRound: multi / rounds };
+      })(),
       traded: ratio(100 * sum(e("traded_succ")), sum(e("traded_opps"))),
       trade_opp_pr: ex.length ? ratio(sum(e("trade_opps")), exRounds) : null,
       traded_opp_pr: ex.length ? ratio(sum(e("traded_opps")), exRounds) : null,
@@ -583,7 +600,7 @@ const Analysis = (() => {
     const entryRate = p.entry_rate ?? frac(life.entry_rate);
     const tradeSuccess = d.leetify?.stats?.trade_kills_success_percentage ?? null;
     const sig = { tradeOpp: p.trade_opp_pr, tradedOpp: p.traded_opp_pr, survival: p.survival, util: p.util_pr, enemiesFlashed: p.blinded_pr,
-      kpr: p.kpr, apr: p.apr, adr: p.adr, lastAlive: p.last_alive_pr, flashAssist: p.flash_assist_pr };
+      kpr: p.kpr, apr: p.apr, adr: p.adr, lastAlive: p.last_alive_pr, flashAssist: p.flash_assist_pr, tradeAtt: p.trade_att, snowball: p.snowball };
 
     const why = (label, value) => ({ label, value });
     const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
@@ -682,8 +699,13 @@ const Analysis = (() => {
     // last alive: the player still standing when the rest of the team is dead - passive and baiting players end up there often
     // trading: converting the chances to trade a teammate (Leetify counts a trade only within a few seconds) keeps rounds moving
     const tradeConv = p.trade ?? tradeSuccess;
-    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), 0.3], [inv(lin(sig.survival, 25, 42)), 0.2], [lin(sig.tradedOpp, 0.12, 0.30), 0.15],
-      [inv(lin(sig.tradeOpp, 0.25, 0.5)), 0.1], [inv(lin(sig.lastAlive, 0.025, 0.065)), 0.15], [lin(tradeConv, 35, 65), 0.1]]);
+    // trade attempts: real players swing for ~85% of trade chances (median match 89%, bottom 10% ~62%)
+    // snowball: non-clutch multi-kill share of kill-rounds vs the KPR expectation, so better aim alone doesn't count as aggression
+    const AGG_WEIGHTS = { entry: 0.2, survival: 0.15, traded: 0.15, behind: 0.1, lastAlive: 0.1, tradeConv: 0.1, tradeAtt: 0.1, snowball: 0.1 };
+    const aggScore = weighted([[lin(entryRate, 0.12, 0.30), AGG_WEIGHTS.entry], [inv(lin(sig.survival, 25, 42)), AGG_WEIGHTS.survival],
+      [lin(sig.tradedOpp, 0.12, 0.30), AGG_WEIGHTS.traded], [inv(lin(sig.tradeOpp, 0.25, 0.5)), AGG_WEIGHTS.behind],
+      [inv(lin(sig.lastAlive, 0.025, 0.065)), AGG_WEIGHTS.lastAlive], [lin(tradeConv, 35, 65), AGG_WEIGHTS.tradeConv],
+      [lin(sig.tradeAtt, 70, 95), AGG_WEIGHTS.tradeAtt], [lin(sig.snowball?.diff, -5, 5), AGG_WEIGHTS.snowball]]);
     let aggression = null;
     if (aggScore != null) {
       const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
@@ -697,6 +719,8 @@ const Analysis = (() => {
         why: [...known("First duels per round (~0.20 average)", entryRate, f2), ...known("Opening duels won", entryWin, pct), ...known("Rounds survived", sig.survival, pct),
           ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Right behind a teammate who dies, per round", sig.tradeOpp, f2),
           ...known("Trades converted (teammate dies near them, they get the kill back fast)", tradeConv, pct),
+          ...known("Swings for the trade (share of trade chances)", sig.tradeAtt, pct),
+          ...known("Multi-kill rounds outside clutches vs expected for their kill rate", sig.snowball?.diff, (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)} pts (${sig.snowball.share.toFixed(0)}% vs ${sig.snowball.expected.toFixed(0)}%)`),
           ...known("Grenades per round", sig.util, f2), ...known("Flash assists for teammates per round", sig.flashAssist, f2),
           ...known("Last alive (1v1/1v2), share of rounds", sig.lastAlive == null ? null : 100 * sig.lastAlive, (v) => `${v.toFixed(1)}%`)] };
     }
