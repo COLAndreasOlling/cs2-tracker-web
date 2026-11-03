@@ -205,6 +205,7 @@ const Analysis = (() => {
       entry_success: entries && entries.b >= 10 ? (100 * entries.a) / entries.b : null,
       clutch_1v1: clutch && clutch.b >= 5 ? (100 * clutch.a) / clutch.b : null,
       // last alive: rounds that ended as a 1v1 or 1v2 for the player (FACEIT doesn't count 1v3+), per round
+      flash_assist_pr: ex.length ? ratio(sum(e("flash_assist")), exRounds) : null, // Leetify: a teammate killed an enemy you flashed
       last_alive_pr: per((m) => (fxOf(m)?.v1_count != null ? fxOf(m).v1_count + (fxOf(m).v2_count || 0) : null)),
       sniper_share: (() => { const s = pairSum(rows, (m) => fxOf(m)?.sniper_kills, (m) => m.kills); return s && s.b >= 50 ? s.a / s.b : null; })(),
       preaim: mean(ms.map((m) => m.aim_preaim)),
@@ -582,7 +583,7 @@ const Analysis = (() => {
     const entryRate = p.entry_rate ?? frac(life.entry_rate);
     const tradeSuccess = d.leetify?.stats?.trade_kills_success_percentage ?? null;
     const sig = { tradeOpp: p.trade_opp_pr, tradedOpp: p.traded_opp_pr, survival: p.survival, util: p.util_pr, enemiesFlashed: p.blinded_pr,
-      kpr: p.kpr, apr: p.apr, adr: p.adr, lastAlive: p.last_alive_pr };
+      kpr: p.kpr, apr: p.apr, adr: p.adr, lastAlive: p.last_alive_pr, flashAssist: p.flash_assist_pr };
 
     const why = (label, value) => ({ label, value });
     const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
@@ -645,16 +646,22 @@ const Analysis = (() => {
     // playstyle tags: how the player spends the early round (no positions or timings in the APIs, so estimates)
     const tags = [];
     const quietEarly = inv(lin(entryRate, 0.12, 0.22)); // rarely in the round's first duels
-    const bait = hasTrade ? weighted([[quietEarly, 0.25], [lin(sig.tradeOpp, 0.3, 0.5), 0.3], [inv(lin(sig.tradedOpp, 0.12, 0.25)), 0.15], [lin(sig.survival, 28, 42), 0.15], [lin(sig.lastAlive, 0.04, 0.07), 0.15]]) : null;
+    // baiters also keep their utility to themselves: few grenades (they give away a position) and few flashes for teammates
+    const lowUtil = inv(lin(sig.util, 1.0, 1.8)), lowFlashForTeam = inv(lin(sig.flashAssist, 0.01, 0.035)); // real players: ~1.8–1.9 grenades, 0.02–0.03 flash assists per round
+    const bait = hasTrade ? weighted([[quietEarly, 0.2], [lin(sig.tradeOpp, 0.3, 0.5), 0.25], [inv(lin(sig.tradedOpp, 0.12, 0.25)), 0.1], [lin(sig.survival, 28, 42), 0.1],
+      [lin(sig.lastAlive, 0.04, 0.07), 0.1], [lowUtil, 0.1], [lowFlashForTeam, 0.15]]) : null;
+    const selfishUtil = lowUtil != null && lowFlashForTeam != null && lowUtil >= 0.6 && lowFlashForTeam >= 0.6;
     if (!isAwper && bait != null && bait >= TAG_MIN) {
       const facts = `Rarely first in (${f2(entryRate ?? 0)} first duels per round), often right behind a teammate who dies (${f2(sig.tradeOpp)} trade chances per round), survives ${pct(sig.survival)} of rounds`;
-      if (tradeSuccess != null && tradeSuccess < 45)
-        tags.push({ id: "bait", tone: "bad", name: "Baits without trading", score: bait,
-          detail: `${facts}, but converts only ${pct(tradeSuccess)} of those trades.`,
+      const utilFacts = `${sig.util != null ? `${f2(sig.util)} grenades per round` : ""}${sig.util != null && sig.flashAssist != null ? " and " : ""}${sig.flashAssist != null ? `${f2(sig.flashAssist)} flash assists per round` : ""}`;
+      const noTrade = tradeSuccess != null && tradeSuccess < 45;
+      if (noTrade || selfishUtil)
+        tags.push({ id: "bait", tone: "bad", name: noTrade ? "Baits without trading" : "Baits – keeps utility to themselves", score: bait,
+          detail: `${facts}${noTrade ? `, but converts only ${pct(tradeSuccess)} of those trades` : ""}${selfishUtil ? `${noTrade ? ";" : ","} throws little utility and rarely flashes for teammates (${utilFacts})` : ""}.`,
           mate: "As a teammate: don't count on the trade – peek with them, not in front of them.",
           opp: "As an opponent: the first player you kill is often left alone – take the duel, then reposition." });
       else tags.push({ id: "second", tone: "info", name: "Plays second – trades others", score: bait,
-        detail: `${facts}${tradeSuccess != null ? `, and trades ${pct(tradeSuccess)} of the time` : ""}.`,
+        detail: `${facts}${tradeSuccess != null ? `, and trades ${pct(tradeSuccess)} of the time` : ""}${utilFacts ? ` (${utilFacts})` : ""}.`,
         mate: "As a teammate: feels like baiting, but it pays off – make sure someone else is willing to go first.",
         opp: "As an opponent: after you get the opening kill, expect them right behind – reset your crosshair for the trade." });
     }
@@ -672,12 +679,13 @@ const Analysis = (() => {
     let aggression = null;
     if (aggScore != null) {
       const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
-      const label = aggScore < 20 ? (behind ? "Baiter" : "Very passive") : aggScore < 35 ? (behind ? "Plays behind teammates" : "Passive")
+      const label = aggScore < 20 ? (behind ? (selfishUtil ? "Baiter" : "Plays behind teammates") : "Very passive") : aggScore < 35 ? (behind ? (selfishUtil ? "Leans baiter" : "Plays behind teammates") : "Passive")
         : aggScore < 45 ? "Leans patient" : aggScore <= 55 ? "Balanced" : aggScore <= 65 ? "Leans aggressive" : aggScore <= 80 ? "Aggressive" : "Hyper-aggressive";
       const tone = "info", reckless = aggScore > 55 && entryWin != null && entryWin < 45;
       aggression = { score: aggScore, label: reckless ? `${label} – loses the first duel` : label, tone: reckless ? "bad" : tone,
         why: [...known("First duels per round (~0.20 average)", entryRate, f2), ...known("Opening duels won", entryWin, pct), ...known("Rounds survived", sig.survival, pct),
           ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Right behind a teammate who dies, per round", sig.tradeOpp, f2),
+          ...known("Grenades per round", sig.util, f2), ...known("Flash assists for teammates per round", sig.flashAssist, f2),
           ...known("Last alive (1v1/1v2), share of rounds", sig.lastAlive == null ? null : 100 * sig.lastAlive, (v) => `${v.toFixed(1)}%`)] };
     }
 
