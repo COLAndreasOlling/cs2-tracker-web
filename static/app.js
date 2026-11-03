@@ -791,7 +791,6 @@ function strengths(d) {
   if (r.positioning != null) add("Positioning", `Leetify ${r.positioning.toFixed(0)}`, r.positioning);
   if (r.utility != null) add("Utility", `Leetify ${r.utility.toFixed(0)}`, r.utility);
   if (r.opening != null) add("Opening duels", `Leetify ${signed(r.opening, 1)}`, 50 + r.opening * 8);
-  if (r.clutch != null) add("Clutches", `Leetify ${signed(r.clutch, 1)}`, 50 + r.clutch * 8);
   if (o.kd != null) add("Fragging", `K/D ${o.kd.toFixed(2)}`, 50 + (o.kd - 1) * 100);
   if (o.adr != null) add("Damage", `ADR ${o.adr.toFixed(0)}`, 50 + (o.adr - 77) * 2);
   if (o.hs != null) add("Headshots", `${Math.round(o.hs)}% HS`, 50 + (o.hs - 45) * 2.5);

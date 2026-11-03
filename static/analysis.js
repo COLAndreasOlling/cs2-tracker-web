@@ -651,7 +651,7 @@ const Analysis = (() => {
     const lr = d.leetify?.rating || {}, traits = [];
     const clutch1v1 = p.clutch_1v1 ?? (frac(life.clutch_1v1) != null ? 100 * frac(life.clutch_1v1) : null);
     const entryWin = p.entry_success ?? (frac(life.entry_success) != null ? 100 * frac(life.entry_success) : null);
-    if ((lr.clutch != null && lr.clutch >= 2) || (lr.clutch == null && clutch1v1 != null && clutch1v1 >= 60)) traits.push("Clutch player");
+    if (clutch1v1 != null && clutch1v1 >= 60) traits.push("Clutch player"); // FACEIT 1v1s only – Leetify's clutch rating overrates
     if ((lr.opening != null && lr.opening >= 2) || (lr.opening == null && entryWin != null && entryWin >= 55)) traits.push("Wins opening duels");
     if ((lr.opening != null && lr.opening <= -2) || (lr.opening == null && entryWin != null && entryWin < 42)) traits.push("Loses opening duels");
     if (sig.kpr >= 0.85) traits.push("High fragger");
