@@ -1,5 +1,5 @@
 # Fetches CS2 item prices from Skinport's public API (no account or key) once a day and stores
-# them on the `prices` branch; the Pages deploy copies them to static/prices.json.
+# them on the `prices` branch, with USD exchange rates; the Pages deploy copies them to static/prices.json.
 name: Update prices
 
 on:
@@ -26,7 +26,9 @@ jobs:
           curl -sfS --retry 3 --compressed -H "Accept-Encoding: br, gzip" "https://api.skinport.com/v1/items?app_id=730&currency=USD" \
             | jq -c '[.[] | {key: .market_hash_name, value: (.min_price // .suggested_price)} | select(.value != null)] | from_entries' > out/items.json
           echo '{}' > out/stickers.json
-          echo "items: $(jq length out/items.json)"
+          # USD exchange rates (ECB via Frankfurter, no key) so visitors see their own currency
+          curl -sfSL --retry 3 "https://api.frankfurter.app/latest?from=USD" | jq -c '.rates + {USD: 1}' > out/rates.json || echo '{"USD":1}' > out/rates.json
+          echo "items: $(jq length out/items.json) | currencies: $(jq length out/rates.json)"
       - name: Save to prices branch
         run: |
           cd out && git init -q && git checkout -q -b prices

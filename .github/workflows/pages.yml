@@ -45,8 +45,8 @@ jobs:
       - name: Add prices
         run: |
           if git fetch -q origin prices; then
-            jq -cs --arg u "$(git log -1 --format=%cs origin/prices)" '{updated: $u, currency: "USD", prices: (.[0] + .[1])}' \
-              <(git show origin/prices:items.json) <(git show origin/prices:stickers.json) > static/prices.json
+            jq -cs --arg u "$(git log -1 --format=%cs origin/prices)" '{updated: $u, currency: "USD", prices: (.[0] + .[1]), rates: (.[2] // {USD: 1})}' \
+              <(git show origin/prices:items.json) <(git show origin/prices:stickers.json) <(git show origin/prices:rates.json 2>/dev/null || echo '{"USD":1}') > static/prices.json
             echo "prices: $(jq '.prices | length' static/prices.json)"
           else echo "no prices branch yet"; fi
       # Cache-busting: each deploy gets new asset URLs, so browsers load the update without Ctrl+F5.

@@ -854,7 +854,33 @@ const INV_PROXY = ((window.CS2_CONFIG && window.CS2_CONFIG.inventoryProxy) || ""
 let pricesP = null;
 const loadPrices = () => (pricesP ||= fetch("prices.json").then((r) => (r.ok ? r.json() : null)).catch(() => null));
 const invCache = new Map();
-const usd = (v) => `$${v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2)}`;
+// The visitor's own currency: time zone first (a Danish user with an English browser is still in
+// Copenhagen), then the browser language's region; USD when we have no rate for it.
+const EURO_TZ = "Amsterdam Athens Berlin Bratislava Brussels Dublin Helsinki Lisbon Ljubljana Luxembourg Madrid Malta Monaco Paris Riga Rome Tallinn Vienna Vilnius Zagreb Nicosia".split(" ");
+const TZ_CUR = { Copenhagen: "DKK", Stockholm: "SEK", Oslo: "NOK", London: "GBP", Zurich: "CHF", Warsaw: "PLN", Prague: "CZK", Budapest: "HUF",
+  Bucharest: "RON", Reykjavik: "ISK", Istanbul: "TRY", Tokyo: "JPY", Seoul: "KRW", Shanghai: "CNY", Hong_Kong: "HKD", Singapore: "SGD",
+  Kolkata: "INR", Jakarta: "IDR", Manila: "PHP", Bangkok: "THB", Kuala_Lumpur: "MYR", Jerusalem: "ILS", Johannesburg: "ZAR",
+  Auckland: "NZD", Sao_Paulo: "BRL", Mexico_City: "MXN", Toronto: "CAD", Vancouver: "CAD", Edmonton: "CAD", Winnipeg: "CAD", Halifax: "CAD" };
+const REGION_CUR = { DK: "DKK", SE: "SEK", NO: "NOK", GB: "GBP", CH: "CHF", PL: "PLN", CZ: "CZK", HU: "HUF", RO: "RON", IS: "ISK", TR: "TRY",
+  JP: "JPY", KR: "KRW", CN: "CNY", HK: "HKD", SG: "SGD", IN: "INR", ID: "IDR", PH: "PHP", TH: "THB", MY: "MYR", IL: "ILS", ZA: "ZAR",
+  AU: "AUD", NZ: "NZD", BR: "BRL", MX: "MXN", CA: "CAD", US: "USD",
+  DE: "EUR", FR: "EUR", ES: "EUR", IT: "EUR", NL: "EUR", BE: "EUR", AT: "EUR", FI: "EUR", IE: "EUR", PT: "EUR", GR: "EUR", LU: "EUR",
+  EE: "EUR", LV: "EUR", LT: "EUR", SK: "EUR", SI: "EUR", HR: "EUR", MT: "EUR", CY: "EUR" };
+function localCurrency() {
+  let tz = ""; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch {}
+  const [area, city = ""] = tz.split("/");
+  if (TZ_CUR[city]) return TZ_CUR[city];
+  if (area === "Europe" && EURO_TZ.includes(city)) return "EUR";
+  if (area === "Australia") return "AUD";
+  const region = (navigator.language || "").split("-")[1];
+  return REGION_CUR[(region || "").toUpperCase()] || "USD";
+}
+let fx = { cur: "USD", rate: 1 };
+const money = (v) => {
+  const x = v * fx.rate;
+  try { return new Intl.NumberFormat(navigator.language, { style: "currency", currency: fx.cur, currencyDisplay: "narrowSymbol", maximumFractionDigits: x >= 100 ? 0 : 2, minimumFractionDigits: x >= 100 ? 0 : 2 }).format(x); }
+  catch { return `${fx.cur} ${Math.round(x).toLocaleString()}`; }
+};
 
 const inventorySlot = (d) => (INV_PROXY && !d.demo ? `<div class="strengths" id="invRow"><span class="k">Inventory</span><span class="inv muted">checking…</span></div>` : "");
 
@@ -872,16 +898,18 @@ async function loadInventory(d) {
   if (inv.status !== "ok") return chip("muted", inv.status === "busy" ? "Steam is busy – try again in a minute" : "Couldn't load");
   const count = inv.items.reduce((a, x) => a + x.count, 0);
   if (!pr || !pr.prices) return chip("", `${fmtInt(count)} items<small>no prices yet</small>`);
+  const cur = localCurrency(), rate = pr.rates && pr.rates[cur];
+  fx = rate ? { cur, rate } : { cur: "USD", rate: 1 };
   const priced = inv.items.map((x) => ({ ...x, each: pr.prices[x.name] })).filter((x) => x.each != null)
     .map((x) => ({ ...x, total: x.each * x.count })).sort((a, b) => b.total - a.total);
   const total = priced.reduce((a, x) => a + x.total, 0);
-  const el = chip(total >= 1000 ? "rich" : "", `≈ ${usd(total)}<small>${fmtInt(count)} items</small>`);
+  const el = chip(total >= 1000 ? "rich" : "", `≈ ${money(total)}<small>${fmtInt(count)} items</small>`);
   const top = priced.slice(0, 5);
-  bindHoverTip(el, `<div class="t">Inventory ≈ ${usd(total)}</div>
+  bindHoverTip(el, `<div class="t">Inventory ≈ ${money(total)}</div>
     <div class="muted" style="margin-bottom:6px">${fmtInt(count)} items, ${fmtInt(priced.reduce((a, x) => a + x.count, 0))} with a market price.</div>
     ${top.length ? `<table class="scoretip"><thead><tr><th>Most valuable</th><th class="n">Price</th></tr></thead><tbody>
-      ${top.map((x) => `<tr><td>${esc(x.name)}${x.count > 1 ? ` ×${x.count}` : ""}</td><td class="n">${usd(x.total)}</td></tr>`).join("")}</tbody></table>` : ""}
-    <div class="muted" style="margin-top:6px">Lowest Skinport listing, updated ${esc(pr.updated || "?")}. Float, stickers on skins and patterns aren't priced in.</div>`);
+      ${top.map((x) => `<tr><td>${esc(x.name)}${x.count > 1 ? ` ×${x.count}` : ""}</td><td class="n">${money(x.total)}</td></tr>`).join("")}</tbody></table>` : ""}
+    <div class="muted" style="margin-top:6px">Lowest Skinport listing, updated ${esc(pr.updated || "?")}${fx.cur !== "USD" ? ` – $${Math.round(total).toLocaleString()} converted to ${fx.cur} at the ECB rate` : ""}. Float, stickers on skins and patterns aren't priced in.</div>`);
 }
 
 const FACEIT_LVL_COLORS = { 1: "#9aa0a6", 2: "#1ce400", 3: "#1ce400", 4: "#ffc800", 5: "#ffc800", 6: "#ffc800", 7: "#ffc800", 8: "#ff6309", 9: "#ff6309", 10: "#fe1f00" };
