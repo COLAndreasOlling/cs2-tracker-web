@@ -318,7 +318,7 @@ function render(d) {
       ${id.avatar ? `<img src="${esc(id.avatar)}" alt="">` : ""}<b>${esc(id.name)}</b>${level ? `<span class="muted">${esc(level)}</span>` : ""}${score != null ? `<span class="muted">Score ${score}</span>` : ""}
     </div>
   </nav>
-  <div class="card hero${rankEdge(d) ? ` edged edge-${rankEdge(d).tier}` : ""}"${rankEdge(d) ? ` style="--edge:${rankEdge(d).color}" title="${esc(rankEdge(d).why)}"` : ""}>
+  <div class="card hero${rankEdge(d) ? ` edged edge-${rankEdge(d).tier}` : ""}"${rankEdge(d) ? ` style="--edge:${rankEdge(d).color}"` : ""}>
     ${id.avatar ? `<img class="avatar" src="${esc(id.avatar)}" alt="">` : `<div class="avatar">${esc((id.name || "?")[0].toUpperCase())}</div>`}
     <div>
       <h1>${esc(id.name)} ${id.country ? `<span class="muted" style="font-size:14px;font-weight:500">${esc(id.country.toUpperCase())}</span>` : ""}</h1>
