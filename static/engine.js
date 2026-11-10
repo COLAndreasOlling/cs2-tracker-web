@@ -175,10 +175,31 @@ const Engine = (() => {
     catch (e) { raw.errors.push(`lifetime stats: ${e.message}`); }
     try { // the latest 200 matches; with `since`, keep paging back until that date (a season start)
       raw.complete = false; raw.since = since;
+      // FACEIT refuses big offsets on this endpoint (HTTP 400 a few hundred matches back). Past that, page by
+      // time instead: `to` = just before the oldest match loaded (tried in ms, then in seconds).
+      const seen = new Set(), idOf = (m) => (m.stats || m)["Match Id"] || (m.stats || m).match_id;
+      const tsOf = (m) => Number(pick(m.stats || m, "Match Finished At", "Updated At", "Created At"));
+      let byTime = false, unit = 1;
       for (let pg = 0; pg < (since ? FACEIT_MAX_PAGES : 2); pg++) {
-        const page = (await faceitGet(`/players/${pid}/games/cs2/stats`, key, { offset: pg * 100, limit: 100 })).items || [];
-        raw.matches.push(...page);
-        if (page.length < 100) { raw.complete = true; break; }
+        let page;
+        const oldest = raw.matches.length ? tsOf(raw.matches[raw.matches.length - 1]) : NaN;
+        try {
+          page = byTime
+            ? (await faceitGet(`/players/${pid}/games/cs2/stats`, key, { limit: 100, from: Math.floor((Date.parse(since) - 864e5) / unit), to: Math.floor((oldest - 1) / unit) })).items || []
+            : (await faceitGet(`/players/${pid}/games/cs2/stats`, key, { offset: pg * 100, limit: 100 })).items || [];
+        } catch (e) {
+          if (e.status !== 400 || !since || !Number.isFinite(oldest) || (byTime && unit === 1000)) {
+            if (byTime || pg) { raw.limited = true; break; } // keep what we have
+            throw e;
+          }
+          if (byTime) unit = 1000; else byTime = true;
+          pg--; continue; // retry this page by time
+        }
+        const fresh = page.filter((m) => { const id = idOf(m); if (!id || seen.has(id)) return !id; seen.add(id); return true; });
+        raw.matches.push(...fresh);
+        if (byTime && !fresh.length && unit === 1) { unit = 1000; pg--; continue; } // ms ignored: try seconds
+        if (byTime && !fresh.length) { raw.limited = true; break; } // FACEIT won't go further back
+        if (page.length < 100) { if (!byTime) raw.complete = true; break; } // by time, `from` stops at the season start
         const last = page[page.length - 1], at = iso(pick(last.stats || last, "Match Finished At", "Updated At", "Created At"));
         if (since && at && at < since) break;
       }
@@ -327,7 +348,7 @@ const Engine = (() => {
       bans: raw.bans == null ? null : raw.bans.map((b) => ({ reason: b.reason, type: b.type, game: b.game, starts_at: b.starts_at, ends_at: b.ends_at })),
       maps, matches,
       // how far back the per-match list goes: the oldest match loaded, and whether that's all of them
-      matches_oldest: matches.length ? matches[matches.length - 1].date : null, matches_complete: !!raw.complete, matches_since: raw.since || null,
+      matches_oldest: matches.length ? matches[matches.length - 1].date : null, matches_complete: !!raw.complete, matches_limited: !!raw.limited, matches_since: raw.since || null,
     };
   }
 

@@ -220,7 +220,7 @@ const inSeason = (s) => (m) => m.date && m.date >= s.start && (!s.end || m.date 
 /** Does showing this season need older FACEIT matches than the ones loaded? */
 function seasonNeedsMore(d, s) {
   const fc = d?.faceit;
-  if (!s || !fc?.available || fc.matches_complete || !fc.matches_oldest) return false;
+  if (!s || !fc?.available || fc.matches_complete || fc.matches_limited || !fc.matches_oldest) return false;
   if (fc.matches_since && fc.matches_since <= s.start) return false; // already went back this far (2,000-match cap)
   return fc.matches_oldest > s.start;
 }
