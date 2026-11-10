@@ -591,15 +591,18 @@ function eloPercentile(elo) {
 /** Players per ELO point at x - piecewise, then smoothed for the curve. */
 const eloDensity = (x) => { const l = ELO_LEVELS.find(([lo, hi]) => x >= lo && x <= hi) || (x < 100 ? null : ELO_LEVELS[9]); if (!l) return 0;
   return l[1] === Infinity ? l[2] * ELO_TAIL * Math.exp(-ELO_TAIL * (x - l[0])) : l[2] / (l[1] - l[0]); };
-function eloTipHtml(elo) {
-  const W = 340, H = 120, top = 8, base = 96, x0 = 0, xMax = Math.max(3200, Math.ceil((elo + 300) / 100) * 100);
+function eloTipHtml(elo, live = null) {
+  const chal = live?.challengerElo || null;
+  const W = 340, H = 120, top = 8, base = 96, x0 = 0, xMax = Math.max(3200, Math.ceil((Math.max(elo, chal || 0) + 300) / 100) * 100);
   const sx = (v) => x0 + (v / xMax) * W;
   // smooth: average the stepped density over ±60 ELO so the bands blend into one curve
   const pts = []; for (let x = 0; x <= xMax; x += 10) { let s = 0, k = 0; for (let dx = -60; dx <= 60; dx += 10) { s += eloDensity(x + dx); k++; } pts.push([x, s / k]); }
   const yMaxD = Math.max(...pts.map((p) => p[1])), sy = (d) => base - (d / yMaxD) * (base - top);
   const line = pts.map(([x, d], i) => `${i ? "L" : "M"}${sx(x).toFixed(1)},${sy(d).toFixed(1)}`).join("");
   const area = (to) => { const ps = pts.filter(([x]) => x <= to); return `M${sx(0)},${base}${ps.map(([x, d]) => `L${sx(x).toFixed(1)},${sy(d).toFixed(1)}`).join("")}L${sx(Math.min(to, xMax)).toFixed(1)},${base}Z`; };
-  const pct = eloPercentile(elo), topPct = 100 * (1 - pct);
+  // live: the player's position in their FACEIT region; else the July 2026 level counts
+  const liveTop = live?.position && live?.total ? (100 * live.position) / live.total : null;
+  const pct = eloPercentile(elo), topPct = liveTop ?? 100 * (1 - pct);
   // level bands: a tick at each boundary, the number centred in its band (level 10 starts at 2,001 and runs on: "10 →");
   // the player's own level is shaded so it's clear which band the marker sits in
   const lvlIdx = ELO_LEVELS.findIndex(([lo, hi]) => elo >= lo && elo <= hi);
@@ -614,21 +617,65 @@ function eloTipHtml(elo) {
   }).join("") + `<text x="${sx(2000)}" y="${base + 24}" text-anchor="middle" font-size="8" fill="var(--text-muted)">2,000</text>`;
   const mx = sx(Math.min(elo, xMax)), my = sy(pts.reduce((b, p) => (Math.abs(p[0] - elo) < Math.abs(b[0] - elo) ? p : b))[1]);
   const fmtTop = topPct < 1 ? topPct.toFixed(2) : topPct < 10 ? topPct.toFixed(1) : Math.round(topPct);
-  return `<div class="t" style="display:flex;justify-content:space-between;gap:12px"><span>Top ${fmtTop}% on FACEIT</span><span class="muted" style="font-weight:400">${fmtInt(elo)} ELO</span></div>
-    <div class="muted" style="font-size:11px;margin-bottom:4px">Higher ELO than ${(100 * pct).toFixed(1)}% of the ${fmtInt(ELO_TOTAL)} ranked CS2 players</div>
+  const reg = live?.region ? (REGION_NAMES[live.region] || live.region) : null, isChal = live?.position != null && live.position <= 1000;
+  const head = isChal ? `<span style="color:var(--accent)">Challenger</span> · #${fmtInt(live.position)} in ${esc(reg)}`
+    : `Top ${fmtTop}% ${liveTop != null ? `in ${esc(reg)}` : "on FACEIT"}`;
+  const sub = live?.position
+    ? `#${fmtInt(live.position)}${live.total ? ` of ${fmtInt(live.total)}` : ""} ranked players in ${esc(reg)} – live from FACEIT${isChal ? "" : live.position <= 5000 ? ` · ${fmtInt(live.position - 1000)} places from Challenger` : ""}`
+    : `Higher ELO than ${(100 * pct).toFixed(1)}% of the ${fmtInt(ELO_TOTAL)} ranked CS2 players`;
+  const chalLine = chal ? `<line x1="${sx(chal)}" x2="${sx(chal)}" y1="${top + 6}" y2="${base}" stroke="var(--text-primary)" stroke-dasharray="3 2" opacity=".7"/>
+      <text x="${Math.min(sx(chal) + 3, W - 52)}" y="${top + 14}" font-size="9" fill="var(--text-primary)">Challenger ${fmtInt(chal)}+</text>` : "";
+  return `<div class="t" style="display:flex;justify-content:space-between;gap:12px"><span>${head}</span><span class="muted" style="font-weight:400">${fmtInt(elo)} ELO</span></div>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">${sub}</div>
     <svg viewBox="0 -2 ${W} ${H}" width="${W}" height="${H}" style="display:block;overflow:visible">
       ${band}<path d="${area(elo)}" fill="var(--accent)" opacity=".28"/>
       <path d="${line}" fill="none" stroke="var(--text-secondary)" stroke-width="1.5"/>
       <line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="var(--border)"/>
       ${lvlTicks}
-      <line x1="${mx}" x2="${mx}" y1="${top - 4}" y2="${base}" stroke="var(--accent)" stroke-width="2"/>
+      ${chalLine}<line x1="${mx}" x2="${mx}" y1="${top - 4}" y2="${base}" stroke="var(--accent)" stroke-width="2"/>
       <circle cx="${mx}" cy="${my}" r="4" fill="var(--accent)" stroke="var(--surface-1)" stroke-width="2"/>
       <text x="${Math.min(Math.max(mx, 24), W - 24)}" y="${top - 6}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text-primary)">You</text>
     </svg>
     <div class="muted" style="font-size:10px;margin-top:6px;text-align:center">FACEIT level (ELO →) · you: level ${lvlIdx + 1}</div>
-    <div class="muted agabout" style="margin-top:6px">Players per level from FACEIT's official rankings, July 2026 (via csdb.gg). Within level 10 there's no public split, so the tail above 2,000 is an estimate – read the top % there as approximate.</div>`;
+    <div class="muted agabout" style="margin-top:6px">${live?.position
+      ? `Rank, top % and the Challenger line (the region's top 1,000) are live from FACEIT's rankings. The curve's shape is all regions, from FACEIT's rankings in July 2026 (via csdb.gg).`
+      : `Players per level from FACEIT's official rankings, July 2026 (via csdb.gg). Within level 10 there's no public split, so the tail above 2,000 is an estimate – read the top % there as approximate.${live === null ? "" : " Live rank couldn't be loaded."}`}</div>`;
 }
-function bindEloTip() { const el = $(".rank.elotip"); if (el) bindHoverTip(el, eloTipHtml(+el.dataset.elo)); }
+
+const REGION_NAMES = { EU: "Europe", US: "North America", SA: "South America", SEA: "Southeast Asia", OCE: "Oceania" };
+/** Live from the FACEIT rankings (needs the FACEIT key): the player's position in their region, the ELO of #1,000
+ *  (the Challenger cut-off) and how many ranked players the region has (found by binary search on the ranking list,
+ *  cached for a day). Any part that fails is left out. */
+async function liveRanking(fc) {
+  if (!fc?.available || !fc.player_id || !fc.region || !Engine.hasFaceitKey?.()) return null;
+  const base = `/rankings/games/cs2/regions/${encodeURIComponent(fc.region)}`;
+  const out = { region: fc.region, position: null, total: null, challengerElo: null };
+  try { const r = await Engine.faceitGet(`${base}/players/${fc.player_id}`, { limit: 1 }); out.position = r.position ?? r.items?.find((i) => i.player_id === fc.player_id)?.position ?? null; } catch {}
+  const KEY = `cs2t_region_${fc.region}`, DAY = 864e5;
+  let cached = null; try { cached = JSON.parse(localStorage.getItem(KEY)); } catch {}
+  if (cached && Date.now() - cached.t < DAY) { out.total = cached.total; out.challengerElo = cached.challengerElo; }
+  else {
+    const at = async (offset) => ((await Engine.faceitGet(base, { offset, limit: 1 })).items || [])[0] || null;
+    try { const c = await at(999); out.challengerElo = c?.faceit_elo ?? null; } catch {}
+    try { // the last occupied position: grow until empty, then halve the gap (~25 calls, once a day)
+      let lo = 0, hi = 1000;
+      while (await at(hi)) { lo = hi; hi *= 2; if (hi > 2e7) throw new Error("too many"); }
+      while (hi - lo > 1) { const mid = Math.floor((lo + hi) / 2); if (await at(mid)) lo = mid; else hi = mid; }
+      out.total = lo + 1;
+    } catch {}
+    try { if (out.total || out.challengerElo) localStorage.setItem(KEY, JSON.stringify({ t: Date.now(), total: out.total, challengerElo: out.challengerElo })); } catch {}
+  }
+  return out.position || out.challengerElo ? out : null;
+}
+const LIVE_RANK = new Map();
+function bindEloTip() {
+  const el = $(".rank.elotip"); if (!el) return;
+  const elo = +el.dataset.elo, d = state.data;
+  bindHoverTip(el, eloTipHtml(elo));
+  const pid = d?.faceit?.player_id;
+  if (pid && !LIVE_RANK.has(pid)) LIVE_RANK.set(pid, liveRanking(d.faceit).catch(() => null)); // once per player per page load
+  (pid ? LIVE_RANK.get(pid) : Promise.resolve(null)).then((live) => { if (state.data === d && el.isConnected) bindHoverTip(el, eloTipHtml(elo, live)); }).catch(() => {});
+}
 
 function bindAggroTips(root) {
   root?.querySelectorAll("[data-aggtip]").forEach((el) => bindHoverTip(el, AGG_TIPS[+el.dataset.aggtip]));
