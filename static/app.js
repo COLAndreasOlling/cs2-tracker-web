@@ -281,8 +281,8 @@ function render(d) {
   if (lt.available && lt.privacy && lt.privacy !== "public") notices.push(`Leetify privacy mode: ${esc(lt.privacy)} – some stats may be hidden.`);
 
   const ranks = [];
-  if (fc.available) ranks.push(["FACEIT", `Lvl ${fmtInt(fc.level)} · ${fmtInt(fc.elo)} ELO`]);
-  else if (lt.available && lt.ranks.faceit_elo) ranks.push(["FACEIT (via Leetify)", `Lvl ${fmtInt(lt.ranks.faceit)} · ${fmtInt(lt.ranks.faceit_elo)} ELO`]);
+  if (fc.available) ranks.push(["FACEIT", `Lvl ${fmtInt(fc.level)} · ${fmtInt(fc.elo)} ELO`, fc.elo]);
+  else if (lt.available && lt.ranks.faceit_elo) ranks.push(["FACEIT (via Leetify)", `Lvl ${fmtInt(lt.ranks.faceit)} · ${fmtInt(lt.ranks.faceit_elo)} ELO`, lt.ranks.faceit_elo]);
   if (lt.available) {
     if (lt.ranks.premier) ranks.push(["Premier", fmtInt(lt.ranks.premier)]);
     if (lt.ranks.leetify != null) ranks.push(["Leetify rating", signed(lt.ranks.leetify, 2)]);
@@ -331,7 +331,7 @@ function render(d) {
       </div>
       ${roleEst.available ? `<div class="role-line"><span class="role-badge" title="Estimated from ${esc(roleEst.basis)}">${esc(roleEst.primary.name)}</span>${roleEst.secondary ? `<span class="muted">also ${esc(roleEst.secondary.name)}</span>` : ""}<span class="muted">· ${esc({ clear: "clear profile", leaning: "leaning", low: "no clear role" }[roleEst.confidence])}</span>${aggroMeter(roleEst.aggression)}${tagChips(roleEst.tags)}</div>` : ""}
       ${formHtml(state.data || d)}${strengthsHtml(d)}${inventorySlot(d)}
-      <div class="ranks">${ranks.map(([k, v]) => `<div class="rank"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
+      <div class="ranks">${ranks.map(([k, v, elo]) => `<div class="rank${elo ? " elotip" : ""}"${elo ? ` tabindex="0" data-elo="${+elo}"` : ""}><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("")}</div>
       ${lt.available && lt.bans && lt.bans.length ? `<div class="down" style="margin-top:8px;font-size:12px">⚠ Platform bans on record: ${lt.bans.map((b) => esc(b.platform)).join(", ")}</div>` : ""}
     </div>
     <div class="score" id="scoreBox" tabindex="0" aria-describedby="tip" aria-label="Performance score ${score ?? "unknown"} out of 100 – hover or focus for the breakdown">
@@ -430,7 +430,7 @@ function render(d) {
 
   $("#progTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.progressTab = k; $("#progTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawProgress(d); };
   $("#formTabs").onclick = (e) => { const k = e.target.dataset.k; if (!k) return; state.formMetric = k; $("#formTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.k === k)); drawForm(d); };
-  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d); bindPlatformBar(); bindAggroTips($("#report")); loadInventory(d);
+  drawMatches(d); drawCoaching(coach); bindPlan(plan, d.steam64); bindScoreTip(d); bindEloTip(); bindPlatformBar(); bindAggroTips($("#report")); loadInventory(d);
   { const k = Analysis.killImpact(d); if (k.available) bindHoverTip($("#killVerdict"), killTipHtml(k)); }
   setupPages(d);
 }
@@ -571,6 +571,54 @@ function aggroTipHtml(a) {
     ${a.lowConfidence ? `<div class="down agabout" style="margin-top:6px">Low confidence: only ${a.coverage}% of the signals have data${missing.length ? ` (missing: ${missing.map((p) => esc(p.label.toLowerCase())).join(", ")})` : ""}.</div>` : missing.length ? `<div class="muted agabout" style="margin-top:6px">No data: ${missing.map((p) => esc(p.label.toLowerCase())).join(", ")}</div>` : ""}
     ${a.info.length ? `<div class="muted agabout" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--grid)">Context, not counted: ${a.info.map((w) => `${esc(w.label)} <b>${esc(w.value)}</b>`).join(" · ")}</div>` : ""}`;
 }
+/* FACEIT CS2 ELO across the ranked player base: players per level (csdb.gg, counted from FACEIT's official regional
+   rankings, July 2026; 1,913,082 ranked players). Inside a level ELO is taken as evenly spread; level 10 has no upper
+   bound, so its players get an exponential tail that starts at level 9's density (no public data inside level 10). */
+const ELO_LEVELS = [[100, 500, 40107], [501, 750, 139915], [751, 900, 183592], [901, 1050, 255540], [1051, 1200, 261750],
+  [1201, 1350, 223638], [1351, 1530, 212517], [1531, 1750, 200786], [1751, 2000, 158636], [2001, Infinity, 236601]];
+const ELO_TOTAL = ELO_LEVELS.reduce((a, l) => a + l[2], 0);
+const ELO_TAIL = (ELO_LEVELS[8][2] / 250) / ELO_LEVELS[9][2]; // per ELO: level 10 density at 2,000 = level 9's
+/** Share of ranked players with a lower ELO (0-1). */
+function eloPercentile(elo) {
+  let below = 0;
+  for (const [lo, hi, n] of ELO_LEVELS) {
+    if (elo >= hi) { below += n; continue; }
+    if (elo > lo) below += hi === Infinity ? n * (1 - Math.exp(-ELO_TAIL * (elo - lo))) : (n * (elo - lo)) / (hi - lo);
+    break;
+  }
+  return below / ELO_TOTAL;
+}
+/** Players per ELO point at x - piecewise, then smoothed for the curve. */
+const eloDensity = (x) => { const l = ELO_LEVELS.find(([lo, hi]) => x >= lo && x <= hi) || (x < 100 ? null : ELO_LEVELS[9]); if (!l) return 0;
+  return l[1] === Infinity ? l[2] * ELO_TAIL * Math.exp(-ELO_TAIL * (x - l[0])) : l[2] / (l[1] - l[0]); };
+function eloTipHtml(elo) {
+  const W = 340, H = 120, top = 8, base = 96, x0 = 0, xMax = Math.max(3200, Math.ceil((elo + 300) / 100) * 100);
+  const sx = (v) => x0 + (v / xMax) * W;
+  // smooth: average the stepped density over ±60 ELO so the bands blend into one curve
+  const pts = []; for (let x = 0; x <= xMax; x += 10) { let s = 0, k = 0; for (let dx = -60; dx <= 60; dx += 10) { s += eloDensity(x + dx); k++; } pts.push([x, s / k]); }
+  const yMaxD = Math.max(...pts.map((p) => p[1])), sy = (d) => base - (d / yMaxD) * (base - top);
+  const line = pts.map(([x, d], i) => `${i ? "L" : "M"}${sx(x).toFixed(1)},${sy(d).toFixed(1)}`).join("");
+  const area = (to) => { const ps = pts.filter(([x]) => x <= to); return `M${sx(0)},${base}${ps.map(([x, d]) => `L${sx(x).toFixed(1)},${sy(d).toFixed(1)}`).join("")}L${sx(Math.min(to, xMax)).toFixed(1)},${base}Z`; };
+  const pct = eloPercentile(elo), topPct = 100 * (1 - pct);
+  const lvlTicks = ELO_LEVELS.slice(1).map(([lo], i) => `<line x1="${sx(lo - 1)}" x2="${sx(lo - 1)}" y1="${base}" y2="${base + 4}" stroke="var(--text-muted)"/><text x="${(sx(lo - 1) + sx(i === 8 ? Math.min(xMax, 2600) : ELO_LEVELS[i + 2][0] - 1)) / 2}" y="${base + 13}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${i + 2}</text>`).join("");
+  const mx = sx(Math.min(elo, xMax)), my = sy(pts.reduce((b, p) => (Math.abs(p[0] - elo) < Math.abs(b[0] - elo) ? p : b))[1]);
+  const fmtTop = topPct < 1 ? topPct.toFixed(2) : topPct < 10 ? topPct.toFixed(1) : Math.round(topPct);
+  return `<div class="t" style="display:flex;justify-content:space-between;gap:12px"><span>Top ${fmtTop}% on FACEIT</span><span class="muted" style="font-weight:400">${fmtInt(elo)} ELO</span></div>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">Higher ELO than ${(100 * pct).toFixed(1)}% of the ${fmtInt(ELO_TOTAL)} ranked CS2 players</div>
+    <svg viewBox="0 -2 ${W} ${H}" width="${W}" height="${H}" style="display:block;overflow:visible">
+      <path d="${area(elo)}" fill="var(--accent)" opacity=".28"/>
+      <path d="${line}" fill="none" stroke="var(--text-secondary)" stroke-width="1.5"/>
+      <line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="var(--border)"/>
+      ${lvlTicks}<text x="${sx(300)}" y="${base + 13}" text-anchor="middle" font-size="9" fill="var(--text-muted)">1</text>
+      <line x1="${mx}" x2="${mx}" y1="${top - 4}" y2="${base}" stroke="var(--accent)" stroke-width="2"/>
+      <circle cx="${mx}" cy="${my}" r="4" fill="var(--accent)" stroke="var(--surface-1)" stroke-width="2"/>
+      <text x="${Math.min(Math.max(mx, 24), W - 24)}" y="${top - 6}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text-primary)">You</text>
+    </svg>
+    <div class="muted" style="font-size:10px;margin-top:2px;text-align:center">FACEIT level (ELO →)</div>
+    <div class="muted agabout" style="margin-top:6px">Players per level from FACEIT's official rankings, July 2026 (via csdb.gg). Within level 10 there's no public split, so the tail above 2,000 is an estimate – read the top % there as approximate.</div>`;
+}
+function bindEloTip() { const el = $(".rank.elotip"); if (el) bindHoverTip(el, eloTipHtml(+el.dataset.elo)); }
+
 function bindAggroTips(root) {
   root?.querySelectorAll("[data-aggtip]").forEach((el) => bindHoverTip(el, AGG_TIPS[+el.dataset.aggtip]));
 }
