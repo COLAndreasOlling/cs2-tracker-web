@@ -600,21 +600,32 @@ function eloTipHtml(elo) {
   const line = pts.map(([x, d], i) => `${i ? "L" : "M"}${sx(x).toFixed(1)},${sy(d).toFixed(1)}`).join("");
   const area = (to) => { const ps = pts.filter(([x]) => x <= to); return `M${sx(0)},${base}${ps.map(([x, d]) => `L${sx(x).toFixed(1)},${sy(d).toFixed(1)}`).join("")}L${sx(Math.min(to, xMax)).toFixed(1)},${base}Z`; };
   const pct = eloPercentile(elo), topPct = 100 * (1 - pct);
-  const lvlTicks = ELO_LEVELS.slice(1).map(([lo], i) => `<line x1="${sx(lo - 1)}" x2="${sx(lo - 1)}" y1="${base}" y2="${base + 4}" stroke="var(--text-muted)"/><text x="${(sx(lo - 1) + sx(i === 8 ? Math.min(xMax, 2600) : ELO_LEVELS[i + 2][0] - 1)) / 2}" y="${base + 13}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${i + 2}</text>`).join("");
+  // level bands: a tick at each boundary, the number centred in its band (level 10 starts at 2,001 and runs on: "10 →");
+  // the player's own level is shaded so it's clear which band the marker sits in
+  const lvlIdx = ELO_LEVELS.findIndex(([lo, hi]) => elo >= lo && elo <= hi);
+  const band = lvlIdx < 0 ? "" : `<rect x="${sx(ELO_LEVELS[lvlIdx][0] - 1)}" y="${top - 4}" width="${sx(Math.min(ELO_LEVELS[lvlIdx][1], xMax)) - sx(ELO_LEVELS[lvlIdx][0] - 1)}" height="${base - top + 4}" fill="var(--text-primary)" opacity=".06"/>`;
+  const lvlTicks = ELO_LEVELS.map(([lo, hi], i) => {
+    const mine = i === lvlIdx, fill = mine ? "var(--text-primary)" : "var(--text-muted)", weight = mine ? ' font-weight="700"' : "";
+    const tick = i ? `<line x1="${sx(lo - 1)}" x2="${sx(lo - 1)}" y1="${top + 20}" y2="${base + 4}" stroke="var(--text-muted)" stroke-dasharray="2 3" opacity=".5"/>` : "";
+    const label = hi === Infinity
+      ? `<text x="${sx(lo - 1) + 3}" y="${base + 13}" font-size="9" fill="${fill}"${weight}>10 →</text>`
+      : `<text x="${(sx(Math.max(lo, 100)) + sx(hi)) / 2}" y="${base + 13}" text-anchor="middle" font-size="9" fill="${fill}"${weight}>${i + 1}</text>`;
+    return tick + label;
+  }).join("") + `<text x="${sx(2000)}" y="${base + 24}" text-anchor="middle" font-size="8" fill="var(--text-muted)">2,000</text>`;
   const mx = sx(Math.min(elo, xMax)), my = sy(pts.reduce((b, p) => (Math.abs(p[0] - elo) < Math.abs(b[0] - elo) ? p : b))[1]);
   const fmtTop = topPct < 1 ? topPct.toFixed(2) : topPct < 10 ? topPct.toFixed(1) : Math.round(topPct);
   return `<div class="t" style="display:flex;justify-content:space-between;gap:12px"><span>Top ${fmtTop}% on FACEIT</span><span class="muted" style="font-weight:400">${fmtInt(elo)} ELO</span></div>
     <div class="muted" style="font-size:11px;margin-bottom:4px">Higher ELO than ${(100 * pct).toFixed(1)}% of the ${fmtInt(ELO_TOTAL)} ranked CS2 players</div>
     <svg viewBox="0 -2 ${W} ${H}" width="${W}" height="${H}" style="display:block;overflow:visible">
-      <path d="${area(elo)}" fill="var(--accent)" opacity=".28"/>
+      ${band}<path d="${area(elo)}" fill="var(--accent)" opacity=".28"/>
       <path d="${line}" fill="none" stroke="var(--text-secondary)" stroke-width="1.5"/>
       <line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="var(--border)"/>
-      ${lvlTicks}<text x="${sx(300)}" y="${base + 13}" text-anchor="middle" font-size="9" fill="var(--text-muted)">1</text>
+      ${lvlTicks}
       <line x1="${mx}" x2="${mx}" y1="${top - 4}" y2="${base}" stroke="var(--accent)" stroke-width="2"/>
       <circle cx="${mx}" cy="${my}" r="4" fill="var(--accent)" stroke="var(--surface-1)" stroke-width="2"/>
       <text x="${Math.min(Math.max(mx, 24), W - 24)}" y="${top - 6}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--text-primary)">You</text>
     </svg>
-    <div class="muted" style="font-size:10px;margin-top:2px;text-align:center">FACEIT level (ELO →)</div>
+    <div class="muted" style="font-size:10px;margin-top:6px;text-align:center">FACEIT level (ELO →) · you: level ${lvlIdx + 1}</div>
     <div class="muted agabout" style="margin-top:6px">Players per level from FACEIT's official rankings, July 2026 (via csdb.gg). Within level 10 there's no public split, so the tail above 2,000 is an estimate – read the top % there as approximate.</div>`;
 }
 function bindEloTip() { const el = $(".rank.elotip"); if (el) bindHoverTip(el, eloTipHtml(+el.dataset.elo)); }
