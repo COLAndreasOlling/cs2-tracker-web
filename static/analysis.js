@@ -583,7 +583,11 @@ const Analysis = (() => {
   const ROLE_MIN = 55; // a role is only named when its score clearly stands out
   const MAP_SHARE_MIN = 0.15; // map tips only for maps that are at least this share of your Active Duty games
   const AWP_SHARE = 0.22; // share of kills with sniper rifles that makes someone the team's AWPer
-  const AWP_HALF_LIFE = 10; // matches: a match 10 games back counts half as much as the latest one
+  // how much a match counts towards the role, by age in days: [up to N days, weight]
+  // each age group's share of the role, scaled down when it has few matches (n / (n + 5))
+  const ROLE_TIERS = [[10, 0.45], [20, 0.25], [30, 0.15], [Infinity, 0.15]];
+  const tierWeight = (i, n) => ROLE_TIERS[i][1] * (n / (n + 5));
+  const ageDays = (m) => { const t = m.date ? Date.parse(m.date) : NaN; return Number.isNaN(t) ? null : Math.max(0, (Date.now() - t) / 864e5); };
 
   function weighted(parts) {
     const ok = parts.filter(([v]) => v != null);
@@ -598,23 +602,32 @@ const Analysis = (() => {
     const basis = faceitOnes.length >= 5 ? `${ms.length} FACEIT matches` : `${ms.length} matches (fewer than 5 detailed FACEIT matches, so all platforms)`;
     if (ms.length < 5) return { available: false, reason: "Needs at least 5 matches with detailed stats (Leetify or FACEIT) to estimate a role." };
 
-    const p = profile(ms);
+    // A role is what you play NOW: the last 10 days make up 45% of the role, 11-20 days 25%, 21-30 days 15% and
+    // everything older 15% - however many old matches there are. Each age group gets its own profile.
+    const tierOf = (m) => { const a = ageDays(m); return a == null ? ROLE_TIERS.length - 1 : ROLE_TIERS.findIndex(([days]) => a <= days); };
+    const groups = ROLE_TIERS.map(() => []);
+    for (const m of ms) groups[tierOf(m)].push(m);
+    const pAll = profile(ms);
+    const parts = groups.map((g, i) => ({ p: g.length ? profile(g) : null, w: tierWeight(i, g.length) })).filter((x) => x.p && x.w);
+    const p = { ...pAll };
+    if (parts.length > 1) for (const k of Object.keys(pAll)) {
+      if (typeof pAll[k] !== "number") continue;
+      const ok = parts.filter((x) => typeof x.p[k] === "number" && !Number.isNaN(x.p[k]));
+      const w = ok.reduce((a, x) => a + x.w, 0);
+      if (w) p[k] = ok.reduce((a, x) => a + x.p[k] * x.w, 0) / w;
+    }
+    const recentN = groups[0].length + groups[1].length + groups[2].length; // matches in the last 30 days
     const life = d.faceit?.available ? d.faceit.lifetime || {} : {};
-    // AWP use, recent games first: a role is what you play NOW. Each match's sniper kills count with a weight
-    // that halves every AWP_HALF_LIFE matches back, so ~10 games of AWPing move the role within a session.
+    // AWP use per match, weighted by the same age tiers
     const snipe = (rows) => { const s = pairSum(rows, (m) => fxOf(m)?.sniper_kills, (m) => (m.faceit_stats || m).kills); return s && s.b >= 40 ? s.a / s.b : null; };
     const weightedSnipe = (() => {
-      let a = 0, b = 0, kills = 0;
-      ms.forEach((m, i) => {
-        const sk = fxOf(m)?.sniper_kills, k = (m.faceit_stats || m).kills;
-        if (sk == null || k == null) return;
-        const w = Math.pow(0.5, i / AWP_HALF_LIFE);
-        a += w * sk; b += w * k; kills += k;
-      });
-      return kills >= 50 && b ? a / b : null;
+      let a = 0, w = 0;
+      groups.forEach((g, i) => { const v = snipe(g); if (v != null) { const wt = tierWeight(i, g.length); a += v * wt; w += wt; } });
+      return w ? a / w : null;
     })();
-    const awpRecent = snipe(ms.slice(0, 10)), awpBefore = snipe(ms.slice(10));
-    const sniperShareAll = p.sniper_share ?? (life.total_sniper_kills != null && life.total_kills_ext ? life.total_sniper_kills / life.total_kills_ext : frac(life.sniper_kill_rate));
+    const last10d = groups[0], older = ms.filter((m) => !last10d.includes(m));
+    const awpRecent = snipe(last10d), awpBefore = snipe(older);
+    const sniperShareAll = pAll.sniper_share ?? (life.total_sniper_kills != null && life.total_kills_ext ? life.total_sniper_kills / life.total_kills_ext : frac(life.sniper_kill_rate));
     const sniperShare = weightedSnipe ?? sniperShareAll;
     const entryRate = p.entry_rate ?? frac(life.entry_rate);
     const tradeSuccess = d.leetify?.stats?.trade_kills_success_percentage ?? null;
@@ -641,7 +654,7 @@ const Analysis = (() => {
       rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(tradeSuccess, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2], [lin(sig.adr, 70, 95), 0.3]]),
     };
     const reasons = {
-      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles (recent games count most)", pct(100 * sniperShare)), ...(awpRecent != null ? [why("… in the last 10 matches", pct(100 * awpRecent))] : []), ...(sniperShareAll != null ? [why("… over all matches", pct(100 * sniperShareAll))] : []), ...known("Rounds survived", sig.survival, pct)],
+      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles (last 30 days count most)", pct(100 * sniperShare)), ...(awpRecent != null ? [why("… in the last 10 days", pct(100 * awpRecent))] : []), ...(sniperShareAll != null ? [why("… over all matches", pct(100 * sniperShareAll))] : []), ...known("Rounds survived", sig.survival, pct)],
       entry: [...known("First duels per round, CT and T (FACEIT; ~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (high = team right behind)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
       anchor: hasTrade && entryRate != null
         ? [...known("First duels per round, CT and T (~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (low = fights alone)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)]
@@ -678,9 +691,9 @@ const Analysis = (() => {
     if (isAwper && scores.lurker != null && scores.lurker >= ROLE_MIN) traits.push("Passive AWP – holds angles away from the team");
     if (!isAwper && sniperShare != null && sniperShare >= 0.12) traits.push("Part-time AWPer");
     if (awpRecent != null && awpBefore != null && awpRecent - awpBefore >= 0.12)
-      traits.push(`Recently picked up the AWP (${pct(100 * awpRecent)} sniper kills in the last 10 vs ${pct(100 * awpBefore)} before)`);
+      traits.push(`Recently picked up the AWP (${pct(100 * awpRecent)} sniper kills in the last 10 days vs ${pct(100 * awpBefore)} before)`);
     else if (awpRecent != null && awpBefore != null && awpBefore - awpRecent >= 0.12)
-      traits.push(`Recently put the AWP down (${pct(100 * awpRecent)} sniper kills in the last 10 vs ${pct(100 * awpBefore)} before)`);
+      traits.push(`Recently put the AWP down (${pct(100 * awpRecent)} sniper kills in the last 10 days vs ${pct(100 * awpBefore)} before)`);
     if (!d.leetify?.available) traits.push("No Leetify data – trade signals unavailable");
 
     // playstyle tags: how the player spends the early round (no positions or timings in the APIs, so estimates)
@@ -763,7 +776,7 @@ const Analysis = (() => {
     }
 
     return {
-      available: true, basis, confidence, traits, ranked, tags, tagScores: { bait, passive }, aggression,
+      available: true, basis: `${basis}, ${recentN} of them in the last 30 days (weighted by age: last 10 days 45%, 11–20 days 25%, 21–30 days 15%, older 15%)`, confidence, traits, ranked, tags, tagScores: { bait, passive }, aggression,
       primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
       secondary: !flexible && !isAwper && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
     };
