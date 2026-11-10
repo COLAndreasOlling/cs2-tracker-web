@@ -583,6 +583,7 @@ const Analysis = (() => {
   const ROLE_MIN = 55; // a role is only named when its score clearly stands out
   const MAP_SHARE_MIN = 0.15; // map tips only for maps that are at least this share of your Active Duty games
   const AWP_SHARE = 0.22; // share of kills with sniper rifles that makes someone the team's AWPer
+  const AWP_HALF_LIFE = 10; // matches: a match 10 games back counts half as much as the latest one
 
   function weighted(parts) {
     const ok = parts.filter(([v]) => v != null);
@@ -599,7 +600,22 @@ const Analysis = (() => {
 
     const p = profile(ms);
     const life = d.faceit?.available ? d.faceit.lifetime || {} : {};
-    const sniperShare = p.sniper_share ?? (life.total_sniper_kills != null && life.total_kills_ext ? life.total_sniper_kills / life.total_kills_ext : frac(life.sniper_kill_rate));
+    // AWP use, recent games first: a role is what you play NOW. Each match's sniper kills count with a weight
+    // that halves every AWP_HALF_LIFE matches back, so ~10 games of AWPing move the role within a session.
+    const snipe = (rows) => { const s = pairSum(rows, (m) => fxOf(m)?.sniper_kills, (m) => (m.faceit_stats || m).kills); return s && s.b >= 40 ? s.a / s.b : null; };
+    const weightedSnipe = (() => {
+      let a = 0, b = 0, kills = 0;
+      ms.forEach((m, i) => {
+        const sk = fxOf(m)?.sniper_kills, k = (m.faceit_stats || m).kills;
+        if (sk == null || k == null) return;
+        const w = Math.pow(0.5, i / AWP_HALF_LIFE);
+        a += w * sk; b += w * k; kills += k;
+      });
+      return kills >= 50 && b ? a / b : null;
+    })();
+    const awpRecent = snipe(ms.slice(0, 10)), awpBefore = snipe(ms.slice(10));
+    const sniperShareAll = p.sniper_share ?? (life.total_sniper_kills != null && life.total_kills_ext ? life.total_sniper_kills / life.total_kills_ext : frac(life.sniper_kill_rate));
+    const sniperShare = weightedSnipe ?? sniperShareAll;
     const entryRate = p.entry_rate ?? frac(life.entry_rate);
     const tradeSuccess = d.leetify?.stats?.trade_kills_success_percentage ?? null;
     const sig = { tradeOpp: p.trade_opp_pr, tradedOpp: p.traded_opp_pr, survival: p.survival, util: p.util_pr, enemiesFlashed: p.blinded_pr,
@@ -625,7 +641,7 @@ const Analysis = (() => {
       rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(tradeSuccess, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2], [lin(sig.adr, 70, 95), 0.3]]),
     };
     const reasons = {
-      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles", pct(100 * sniperShare)), ...known("Rounds survived", sig.survival, pct)],
+      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles (recent games count most)", pct(100 * sniperShare)), ...(awpRecent != null ? [why("… in the last 10 matches", pct(100 * awpRecent))] : []), ...(sniperShareAll != null ? [why("… over all matches", pct(100 * sniperShareAll))] : []), ...known("Rounds survived", sig.survival, pct)],
       entry: [...known("First duels per round, CT and T (FACEIT; ~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (high = team right behind)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
       anchor: hasTrade && entryRate != null
         ? [...known("First duels per round, CT and T (~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (low = fights alone)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)]
@@ -661,6 +677,10 @@ const Analysis = (() => {
     if (isAwper && firstContact >= ROLE_MIN) traits.push("Aggressive AWP – takes opening picks");
     if (isAwper && scores.lurker != null && scores.lurker >= ROLE_MIN) traits.push("Passive AWP – holds angles away from the team");
     if (!isAwper && sniperShare != null && sniperShare >= 0.12) traits.push("Part-time AWPer");
+    if (awpRecent != null && awpBefore != null && awpRecent - awpBefore >= 0.12)
+      traits.push(`Recently picked up the AWP (${pct(100 * awpRecent)} sniper kills in the last 10 vs ${pct(100 * awpBefore)} before)`);
+    else if (awpRecent != null && awpBefore != null && awpBefore - awpRecent >= 0.12)
+      traits.push(`Recently put the AWP down (${pct(100 * awpRecent)} sniper kills in the last 10 vs ${pct(100 * awpBefore)} before)`);
     if (!d.leetify?.available) traits.push("No Leetify data – trade signals unavailable");
 
     // playstyle tags: how the player spends the early round (no positions or timings in the APIs, so estimates)
