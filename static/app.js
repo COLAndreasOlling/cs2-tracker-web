@@ -33,6 +33,7 @@ function showTip(html, ev) {
   let x = ev.clientX + 14, y = ev.clientY + 14;
   if (x + r.width > innerWidth - 8) x = ev.clientX - r.width - 14;
   if (y + r.height > innerHeight - 8) y = ev.clientY - r.height - 14;
+  x = Math.max(8, Math.min(x, innerWidth - r.width - 8)); y = Math.max(8, Math.min(y, innerHeight - r.height - 8)); // always fully on screen
   tip.style.left = x + "px"; tip.style.top = y + "px";
 }
 const hideTip = () => (tip.hidden = true);
@@ -558,16 +559,17 @@ function aggroMeter(a) {
 /** The meter's breakdown: each signal's points (they add up to the score) and how far it pushes from balanced. */
 function aggroTipHtml(a) {
   const used = a.parts.filter((p) => p.points != null), missing = a.parts.filter((p) => p.points == null);
-  const push = (v) => `<td class="n ${v >= 1 ? "up" : v <= -1 ? "down" : "muted"}">${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(1)}</td>`;
-  return `<div class="t">Aggression: ${a.score} / 100 – ${esc(a.label)}</div>
-    <div class="muted" style="margin-bottom:6px">50 is balanced. Each signal adds up to its max; “Push” is how far it moves the score from balanced (+ aggressive, − passive).</div>
-    <table class="scoretip"><thead><tr><th>Signal</th><th class="n">Theirs</th><th class="n">Points</th><th class="n">Push</th></tr></thead><tbody>
-      ${used.map((p) => `<tr><td>${esc(p.label)}</td><td class="n">${esc(p.raw)}</td><td class="n">${p.points.toFixed(1)} <span class="muted">/ ${p.max.toFixed(1)}</span></td>${push(p.push)}</tr>
-        <tr class="refrow"><td colspan="4">passive → aggressive: ${esc(p.range)}</td></tr>`).join("")}
-      <tr class="sum"><td colspan="2">Total</td><td class="n">${a.score}</td>${push(a.score - 50)}</tr></tbody></table>
-    ${a.lowConfidence ? `<div class="down" style="margin-top:6px">Low confidence: only ${a.coverage}% of the signals have data. First deaths, last alive and multi-kills come from FACEIT match stats – sign in to get them.</div>` : ""}
-    ${missing.length ? `<div class="muted" style="margin-top:6px">No data, left out (the others count for more): ${missing.map((p) => esc(p.label)).join(", ")}</div>` : ""}
-    ${a.info.length ? `<div class="muted" style="margin-top:6px">Not counted, for context: ${a.info.map((w) => `${esc(w.label)} ${esc(w.value)}`).join(" · ")}</div>` : ""}`;
+  const sgn = (v) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${Math.abs(v).toFixed(0)}`;
+  const scale = (pos, big) => `<span class="agscale${big ? " big" : ""}"><span class="agdot" style="left:${(100 * pos).toFixed(1)}%"></span></span>`;
+  return `<div class="t" style="display:flex;justify-content:space-between;gap:12px"><span>${esc(a.label)}</span><span>${a.score}<span class="muted" style="font-weight:400"> / 100</span></span></div>
+    <div class="agrow" style="margin-bottom:8px"><span class="agend">Bait</span>${scale(a.score / 100, true)}<span class="agend">Aggro</span></div>
+    ${used.map((p) => `<div class="agsig">
+      <div class="agtop"><span>${esc(p.label)}</span><b>${esc(p.raw)}</b></div>
+      <div class="agrow"><span class="agend">${esc(p.lo)}</span>${scale(p.pos)}<span class="agend">${esc(p.hi)}</span><span class="agpush ${p.push >= 1 ? "up" : p.push <= -1 ? "down" : "muted"}">${sgn(p.push)}</span></div>
+      <div class="muted agabout">${esc(p.about)}</div></div>`).join("")}
+    <div class="muted agabout" style="margin-top:6px">Measures style, not skill: what they choose to do, never whether it works. 50 = balanced; the number on the right is how far each signal moves the score.</div>
+    ${a.lowConfidence ? `<div class="down agabout" style="margin-top:6px">Low confidence: only ${a.coverage}% of the signals have data${missing.length ? ` (missing: ${missing.map((p) => esc(p.label.toLowerCase())).join(", ")})` : ""}.</div>` : missing.length ? `<div class="muted agabout" style="margin-top:6px">No data: ${missing.map((p) => esc(p.label.toLowerCase())).join(", ")}</div>` : ""}
+    ${a.info.length ? `<div class="muted agabout" style="margin-top:6px;padding-top:6px;border-top:1px solid var(--grid)">Context, not counted: ${a.info.map((w) => `${esc(w.label)} <b>${esc(w.value)}</b>`).join(" · ")}</div>` : ""}`;
 }
 function bindAggroTips(root) {
   root?.querySelectorAll("[data-aggtip]").forEach((el) => bindHoverTip(el, AGG_TIPS[+el.dataset.aggtip]));

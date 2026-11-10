@@ -217,6 +217,8 @@ const Analysis = (() => {
       traded: ratio(100 * sum(e("traded_succ")), sum(e("traded_opps"))),
       trade_opp_pr: ex.length ? ratio(sum(e("trade_opps")), exRounds) : null,
       traded_opp_pr: ex.length ? ratio(sum(e("traded_opps")), exRounds) : null,
+      // deaths with a teammate right behind, per death - per death so dying less often (skill) doesn't move it
+      traded_per_death: (() => { const s = pairSum(ex, (m) => m.ext.traded_opps, (m) => m.deaths); return s && s.b >= 30 ? s.a / s.b : null; })(),
       survival: (() => { const v = per((m) => (m.ext?.survived != null ? m.ext.survived : m.deaths != null ? Math.max(0, m.rounds - m.deaths) : null)); return v == null ? null : 100 * v; })(),
       entry_rate: per((m) => fxOf(m)?.entry_count),
       entry_success: entries && entries.b >= 10 ? (100 * entries.a) / entries.b : null,
@@ -697,26 +699,36 @@ const Analysis = (() => {
     if (!d.leetify?.available) traits.push("No Leetify data – trade signals unavailable");
 
     // playstyle tags: how the player spends the early round (no positions or timings in the APIs, so estimates)
+    // in front vs behind: of the moments a teammate is close by, how often the player is the one in front.
+    // "in front" = their deaths with a teammate right behind (per death, scaled to an average 0.68 deaths per round);
+    // "behind" = a teammate dies right in front of them (per round)
+    const inFront = p.traded_per_death != null ? p.traded_per_death * 0.68 : null;
+    const frontShare = inFront != null && sig.tradeOpp != null && inFront + sig.tradeOpp > 0 ? inFront / (inFront + sig.tradeOpp) : null;
     const tags = [];
     const quietEarly = inv(lin(entryRate, 0.12, 0.22)); // rarely in the round's first duels
     // baiters also keep their utility to themselves: few grenades (they give away a position) and few flashes for teammates
     const lowUtil = inv(lin(sig.util, 1.0, 1.8)), lowFlashForTeam = inv(lin(sig.flashAssist, 0.01, 0.035)); // real players: ~1.8–1.9 grenades, 0.02–0.03 flash assists per round
-    const bait = hasTrade ? weighted([[quietEarly, 0.2], [lin(sig.tradeOpp, 0.3, 0.5), 0.25], [inv(lin(sig.tradedOpp, 0.12, 0.25)), 0.1], [lin(sig.survival, 28, 42), 0.1],
-      [lin(sig.lastAlive, 0.04, 0.07), 0.1], [lowUtil, 0.1], [lowFlashForTeam, 0.15]]) : null;
+    // Baiting, precisely: standing right behind a teammate when they die (Leetify only counts it when the player is close
+    // enough to trade within a few seconds - a lurker waiting on B for the A hit is NOT counted) and then not swinging
+    // for the trade. Only choices count: how often they are the one behind, and whether they shoot - not whether it hits.
+    const nearDeaths = sig.tradeOpp; // teammates dying right in front of them, per round (~0.3 is typical)
+    const behindOften = nearDeaths != null && nearDeaths >= 0.35 && frontShare != null && frontShare < 0.3;
+    const swing = sig.tradeAtt; // % of those chances where they shoot at the killer
+    const bait = behindOften && swing != null ? weighted([[lin(nearDeaths, 0.3, 0.5), 0.35], [inv(lin(frontShare, 0.18, 0.35)), 0.25], [inv(lin(swing, 65, 90)), 0.4]]) : null;
     const selfishUtil = lowUtil != null && lowFlashForTeam != null && lowUtil >= 0.6 && lowFlashForTeam >= 0.6;
-    if (!isAwper && bait != null && bait >= TAG_MIN) {
-      const facts = `Rarely first in (${f2(entryRate ?? 0)} first duels per round), often right behind a teammate who dies (${f2(sig.tradeOpp)} trade chances per round), survives ${pct(sig.survival)} of rounds`;
-      const utilFacts = `${sig.util != null ? `${f2(sig.util)} grenades per round` : ""}${sig.util != null && sig.flashAssist != null ? " and " : ""}${sig.flashAssist != null ? `${f2(sig.flashAssist)} flash assists per round` : ""}`;
-      const noTrade = tradeSuccess != null && tradeSuccess < 45;
-      if (noTrade || selfishUtil)
-        tags.push({ id: "bait", tone: "bad", name: noTrade ? "Baits without trading" : "Baits – keeps utility to themselves", score: bait,
-          detail: `${facts}${noTrade ? `, but converts only ${pct(tradeSuccess)} of those trades` : ""}${selfishUtil ? `${noTrade ? ";" : ","} throws little utility and rarely flashes for teammates (${utilFacts})` : ""}.`,
+    const utilFacts = `${sig.util != null ? `${f2(sig.util)} grenades per round` : ""}${sig.util != null && sig.flashAssist != null ? " and " : ""}${sig.flashAssist != null ? `${f2(sig.flashAssist)} flash assists per round` : ""}`;
+    if (!isAwper && behindOften && swing != null) {
+      const facts = `When a teammate is close by, they are the one in front only ${pct(100 * frontShare)} of the time; a teammate dies right in front of them ${f2(nearDeaths)} times per round`;
+      if (swing < 75)
+        tags.push({ id: "bait", tone: "bad", name: "Baiter", score: bait,
+          detail: `${facts}, and they shoot back at the killer only ${pct(swing)} of the time (~85% is typical)${selfishUtil ? `. Keeps utility to themselves (${utilFacts})` : ""}. Lurking or waiting on another site doesn't count – only being right behind the teammate who dies.`,
           mate: "As a teammate: don't count on the trade – peek with them, not in front of them.",
           opp: "As an opponent: the first player you kill is often left alone – take the duel, then reposition." });
-      else tags.push({ id: "second", tone: "info", name: "Plays second – trades others", score: bait,
-        detail: `${facts}${tradeSuccess != null ? `, and trades ${pct(tradeSuccess)} of the time` : ""}${utilFacts ? ` (${utilFacts})` : ""}.`,
-        mate: "As a teammate: feels like baiting, but it pays off – make sure someone else is willing to go first.",
-        opp: "As an opponent: after you get the opening kill, expect them right behind – reset your crosshair for the trade." });
+      else if (swing >= 85)
+        tags.push({ id: "second", tone: "info", name: "Plays second – trades others", score: bait,
+          detail: `${facts}, but they swing for the trade ${pct(swing)} of the time – a second-in player, not a baiter.`,
+          mate: "As a teammate: a good partner to entry with – make sure someone else is willing to go first.",
+          opp: "As an opponent: after you get the opening kill, expect them right behind – reset your crosshair for the trade." });
     }
     const passive = weighted([[quietEarly, 0.25], [lin(sig.survival, 30, 45), 0.25], [inv(lin(sig.adr, 65, 85)), 0.15], [inv(lin(sig.tradeOpp, 0.2, 0.4)), 0.15], [lin(sig.lastAlive, 0.04, 0.07), 0.2]]);
     if (!isAwper && passive != null && passive >= TAG_MIN)
@@ -724,10 +736,12 @@ const Analysis = (() => {
         detail: `Rarely in the first duels (${f2(entryRate ?? 0)} per round), survives ${pct(sig.survival)} of rounds, ${sig.adr != null ? `ADR ${sig.adr.toFixed(0)}` : "low damage"}${sig.tradeOpp != null ? `, often away from teammates (${f2(sig.tradeOpp)} trade chances per round)` : ""} – quiet early, alive late.`,
         mate: "As a teammate: they won't open rounds – plan the early round without them and use them for late flanks and retakes.",
         opp: "As an opponent: expect slow rounds, held angles and late flanks – check behind you after the bomb plant, and don't waste time waiting them out." });
-    // self-reliant: dies away from the team, keeps utility, rarely opens rounds - trusts nobody to trade
-    if (!isAwper && !tags.some((t) => t.id === "bait") && sig.tradedOpp != null && sig.tradedOpp < 0.15 && selfishUtil && quietEarly != null && quietEarly >= 0.5)
-      tags.push({ id: "lone", tone: "bad", name: "Lone wolf – plays for themselves", score: null,
-        detail: `Dies where no teammate can trade (${f2(sig.tradedOpp)} per round), rarely takes first duels (${f2(entryRate ?? 0)} per round) and keeps utility to themselves (${f2(sig.util)} grenades, ${f2(sig.flashAssist)} flash assists per round).`,
+    // Lone wolf, precisely: plays away from the team - when they die nobody is close enough to trade them, and they are
+    // rarely close when a teammate dies. Position only; skill doesn't enter it (deaths are counted per death).
+    const tradeablePerDeath = p.traded_per_death; // share of their deaths with a teammate right behind (~0.35 typical)
+    if (!isAwper && !tags.some((t) => t.id === "bait") && tradeablePerDeath != null && nearDeaths != null && tradeablePerDeath < 0.2 && nearDeaths < 0.22)
+      tags.push({ id: "lone", tone: "bad", name: "Lone wolf", score: null,
+        detail: `Only ${pct(100 * tradeablePerDeath)} of their deaths have a teammate close enough to trade (~35% is typical), and a teammate dies right in front of them just ${f2(nearDeaths)} times per round${selfishUtil ? `. Keeps utility to themselves (${utilFacts})` : ""}.`,
         mate: "As a teammate: don't build the round around them – they play their own angle. Ask for one flash or one info call per round.",
         opp: "As an opponent: they're often isolated – find them alone and they have no trade behind them." });
 
@@ -735,44 +749,44 @@ const Analysis = (() => {
     // last alive: the player still standing when the rest of the team is dead - passive and baiting players end up there often
     // trading: converting the chances to trade a teammate (Leetify counts a trade only within a few seconds) keeps rounds moving
     const tradeConv = p.trade ?? tradeSuccess;
-    // trade attempts: real players swing for ~85% of trade chances (median match 89%, bottom 10% ~62%)
+    // trade attempts (scale centred on 85%): real players swing for ~85% of trade chances (median match 89%, bottom 10% ~62%)
     // snowball: non-clutch multi-kill share of kill-rounds vs the KPR expectation, so better aim alone doesn't count as aggression
     // Weights favour what the player chooses (going first, swinging for trades, where they stand, ending up last alive) over
     // what aim or teammates decide. Left out on purpose: trade success (mostly aim) and dying where teammates can trade
     // (pug structure as much as the player) - both still drive the tags.
-    const AGG_WEIGHTS = { firstDeath: 0.3, firstKill: 0.05, tradeAtt: 0.15, lastAlive: 0.15, behind: 0.15, survival: 0.1, snowball: 0.1 };
+    // Style, not skill: every signal counts what the player CHOOSES to do (take the first fight, go in front of or behind
+    // teammates, swing for the trade) - never whether it works. Survival, last alive, multi-kills and duel wins were
+    // dropped: they rise with skill, so good players looked passive and weak ones aggressive.
+    const AGG_WEIGHTS = { opening: 0.4, front: 0.35, tradeAtt: 0.25 };
     const lifeFD = entryRate != null && entryWin != null && p.first_death_pr == null ? entryRate * (1 - entryWin / 100) : null; // FACEIT lifetime fallback
     const lifeFK = entryRate != null && entryWin != null && p.first_kill_pr == null ? entryRate * (entryWin / 100) : null;
     const firstDeath = p.first_death_pr ?? lifeFD, firstKill = p.first_kill_pr ?? lifeFK;
     const fmt = (v, f) => (v == null || Number.isNaN(v) ? null : f(v));
+    const opening = firstKill != null && firstDeath != null ? firstKill + firstDeath : entryRate;
+    // [label, their value, position 0 (bait end) - 1 (aggro end), weight, bait end, aggro end, what it means]
     const aggSignals = [
-      ["First deaths per round (died in the round's opening duel)", fmt(firstDeath, f2), lin(firstDeath, 0.05, 0.16), AGG_WEIGHTS.firstDeath, "0.05 → 0.16"],
-      ["First kills per round", fmt(firstKill, f2), lin(firstKill, 0.06, 0.15), AGG_WEIGHTS.firstKill, "0.06 → 0.15"],
-      ["Swings for the trade", fmt(sig.tradeAtt, pct), lin(sig.tradeAtt, 70, 95), AGG_WEIGHTS.tradeAtt, "70% → 95%"],
-      ["Last alive (1v1/1v2), share of rounds", fmt(sig.lastAlive, (v) => `${(100 * v).toFixed(1)}%`), inv(lin(sig.lastAlive, 0.025, 0.065)), AGG_WEIGHTS.lastAlive, "6.5% → 2.5%"],
-      ["Right behind a teammate who dies, per round", fmt(sig.tradeOpp, f2), inv(lin(sig.tradeOpp, 0.25, 0.5)), AGG_WEIGHTS.behind, "0.50 → 0.25"],
-      ["Rounds survived", fmt(sig.survival, pct), inv(lin(sig.survival, 25, 42)), AGG_WEIGHTS.survival, "42% → 25%"],
-      ["Multi-kills outside clutches vs expected", fmt(sig.snowball?.diff, (v) => `${v > 0 ? "+" : ""}${v.toFixed(1)} pts`), lin(sig.snowball?.diff, -5, 5), AGG_WEIGHTS.snowball, "−5 → +5 pts"],
+      ["Takes the round's first fight", fmt(opening, (v) => `${Math.round(100 * v)}% of rounds`), lin(opening, 0.1, 0.3), AGG_WEIGHTS.opening, "10%", "30%",
+        "Opening duels taken, won or lost (FACEIT). 2 of the 10 players fight it, so 20% is average."],
+      ["Goes in front of teammates", fmt(frontShare, (v) => `${Math.round(100 * v)}%`), lin(frontShare, 0.2, 0.5), AGG_WEIGHTS.front, "20%", "50%",
+        "When a teammate is close by, how often they are the one in front rather than the one behind (Leetify). ~35% is average."],
+      ["Swings for the trade", fmt(sig.tradeAtt, pct), lin(sig.tradeAtt, 75, 95), AGG_WEIGHTS.tradeAtt, "75%", "95%",
+        "When a teammate dies right in front of them, how often they shoot at the killer, hit or miss (Leetify). ~85% is average."],
     ];
     const aggW = sum(aggSignals.filter(([, , v]) => v != null).map(([, , , w]) => w));
     // points: each signal's share of the score (they add up to it); push: how far it moves the score from 50 (balanced)
     const AGG_MIN = 0.35, AGG_SURE = 0.6; // below 60% of the weight the meter is shown as low confidence
-    const aggParts = aggSignals.map(([label, raw, v, w, range]) => (v == null || aggW < AGG_MIN
-      ? { label, raw, range, points: null, max: null, push: null }
-      : { label, raw, range, points: (100 * v * w) / aggW, max: (100 * w) / aggW, push: (100 * (v - 0.5) * w) / aggW }));
+    const aggParts = aggSignals.map(([label, raw, v, w, lo, hi, about]) => (v == null || aggW < AGG_MIN
+      ? { label, raw, lo, hi, about, range: `${lo} → ${hi}`, pos: null, points: null, max: null, push: null }
+      : { label, raw, lo, hi, about, range: `${lo} → ${hi}`, pos: v, points: (100 * v * w) / aggW, max: (100 * w) / aggW, push: (100 * (v - 0.5) * w) / aggW }));
     const aggScore = aggW >= AGG_MIN ? Math.round(sum(aggParts.filter((x) => x.points != null).map((x) => x.points))) : null;
     let aggression = null;
     if (aggScore != null) {
-      const behind = sig.tradeOpp != null && sig.tradeOpp >= 0.35; // low end: close behind teammates (bait) or alone (passive)
-      // away from the team (dies where nobody can trade) with utility kept to themselves: plays for themselves
-      const alone = sig.tradedOpp != null && sig.tradedOpp < 0.15 && selfishUtil;
-      const label = aggScore < 20 ? (behind ? (selfishUtil ? "Baiter" : "Plays behind teammates") : alone ? "Lone wolf – plays for themselves" : "Very passive")
-        : aggScore < 35 ? (behind ? (selfishUtil ? "Leans baiter" : "Plays behind teammates") : alone ? "Lone wolf – plays for themselves" : "Passive")
-        : aggScore < 45 ? "Leans patient" : aggScore <= 55 ? "Balanced" : aggScore <= 65 ? "Leans aggressive" : aggScore <= 80 ? "Aggressive" : "Hyper-aggressive";
+      const label = aggScore < 20 ? "Very passive" : aggScore < 35 ? "Passive" : aggScore < 45 ? "Leans patient" : aggScore <= 55 ? "Balanced"
+        : aggScore <= 65 ? "Leans aggressive" : aggScore <= 80 ? "Aggressive" : "Hyper-aggressive";
       const tone = "info", reckless = aggScore > 55 && entryWin != null && entryWin < 45;
       aggression = { score: aggScore, label: reckless ? `${label} – loses the first duel` : label, tone: reckless ? "bad" : tone,
         parts: aggParts, lowConfidence: aggW < AGG_SURE, coverage: Math.round(100 * aggW),
-        info: [...known("Opening duels won", entryWin, pct), ...known("Trades converted", tradeConv, pct), ...known("Dies where teammates can trade, per round", sig.tradedOpp, f2), ...known("Grenades per round", sig.util, f2), ...known("Flash assists for teammates per round", sig.flashAssist, f2)] };
+        info: [...known("Opening duels won", entryWin, pct), ...known("Trades converted", tradeConv, pct), ...known("Rounds survived", sig.survival, pct), ...known("Grenades per round", sig.util, f2), ...known("Flash assists per round", sig.flashAssist, f2)] };
     }
 
     return {
