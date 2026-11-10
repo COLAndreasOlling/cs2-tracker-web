@@ -205,13 +205,34 @@ try { state.platform = new URLSearchParams(location.search).get("src") || "all";
 const LAST_N = [10, 20, 30, 60, 90, 100];
 try { state.lastN = LAST_N.includes(+new URLSearchParams(location.search).get("last")) ? +new URLSearchParams(location.search).get("last") : 0; } catch { state.lastN = 0; }
 const platformDef = (k) => PLATFORMS.find((p) => p[0] === k) || PLATFORMS[0];
+
+// FACEIT CS2 matchmaking seasons (FACEIT has no API for them). A season runs until the next one starts.
+const SEASONS = [
+  { id: "s10", name: "Season 10", start: "2026-12-09T00:00:00Z" },
+  { id: "s9", name: "Season 9", start: "2026-08-05T00:00:00Z" },
+  { id: "s8", name: "Season 8", start: "2026-04-22T00:00:00Z" },
+  { id: "s7", name: "Season 7", start: "2025-11-19T13:00:00Z" },
+  { id: "pre", name: "Before S7", short: "Earlier", start: "2000-01-01T00:00:00Z" },
+].map((s, i, all) => ({ ...s, end: i ? all[i - 1].start : null })).filter((s) => s.start <= new Date().toISOString());
+try { state.season = SEASONS.some((s) => s.id === new URLSearchParams(location.search).get("season")) ? new URLSearchParams(location.search).get("season") : ""; } catch { state.season = ""; }
+const seasonDef = (id) => SEASONS.find((s) => s.id === id) || null;
+const inSeason = (s) => (m) => m.date && m.date >= s.start && (!s.end || m.date < s.end);
+/** Does showing this season need older FACEIT matches than the ones loaded? */
+function seasonNeedsMore(d, s) {
+  const fc = d?.faceit;
+  if (!s || !fc?.available || fc.matches_complete || !fc.matches_oldest) return false;
+  if (fc.matches_since && fc.matches_since <= s.start) return false; // already went back this far (2,000-match cap)
+  return fc.matches_oldest > s.start;
+}
 /** The report for the selected platform (the full data stays in state.data). */
 /** The report for the chosen platform and "last N matches" preset (matches are newest first). */
 function viewOf(d) {
   const [key, , keep] = platformDef(state.platform);
   const onPlatform = key === "all" || !d.matches.some(keep) ? null : keep;
-  if (!onPlatform && !state.lastN) return d;
-  const ms = onPlatform ? d.matches.filter(onPlatform) : d.matches;
+  const season = key === "faceit" ? seasonDef(state.season) : null; // seasons are FACEIT's
+  if (!onPlatform && !state.lastN && !season) return d;
+  let ms = onPlatform ? d.matches.filter(onPlatform) : d.matches;
+  if (season) ms = ms.filter(inSeason(season));
   const pick = new Set(state.lastN ? ms.slice(0, state.lastN) : ms);
   return Engine.rebuild(d, (m) => pick.has(m));
 }
@@ -227,9 +248,11 @@ async function lookup(q) {
   $("#welcome").hidden = true; $("#report").hidden = true; $("#error").hidden = true; $("#team").hidden = true; $("#loading").hidden = false;
   const tab = new URLSearchParams(location.search).get("tab");
   const src = new URLSearchParams(location.search).get("src");
-  history.replaceState(null, "", "?q=" + encodeURIComponent(q) + (tab ? "&tab=" + encodeURIComponent(tab) : "") + (src ? "&src=" + encodeURIComponent(src) : ""));
+  const season = new URLSearchParams(location.search).get("season");
+  history.replaceState(null, "", "?q=" + encodeURIComponent(q) + (tab ? "&tab=" + encodeURIComponent(tab) : "") + (src ? "&src=" + encodeURIComponent(src) : "") + (src === "faceit" && season ? "&season=" + encodeURIComponent(season) : ""));
   try {
-    const d = await api("/api/player?q=" + encodeURIComponent(q));
+    const sn = state.platform === "faceit" ? seasonDef(state.season) : null;
+    const d = await api("/api/player?q=" + encodeURIComponent(q) + (sn && sn.id !== SEASONS[0].id ? "&since=" + encodeURIComponent(sn.start) : ""));
     state = { ...state, data: d, histPage: 0, filters: { source: "", map: "", outcome: "" } };
     render(viewOf(d));
   } catch (e) {
@@ -322,7 +345,7 @@ function render(d) {
   </div>
 
   <section class="page" data-page="summary">
-  <div class="section-title">Last ${o.matches || 0} matches · ${state.platform === "all" ? "all platforms" : esc(platformDef(state.platform)[1])}</div>
+  <div class="section-title">Last ${o.matches || 0} matches · ${state.platform === "all" ? "all platforms" : esc(platformDef(state.platform)[1])}${state.platform === "faceit" && seasonDef(state.season) ? ` · ${esc(seasonDef(state.season).name)}` : ""}</div>
   <div class="kpis">
     ${kpi("Win rate", pct(o.winrate), delta(f10.winrate, prev.winrate, 1))}
     ${kpi("K/D", fmt(o.kd, 2), delta(f10.kd, prev.kd, 2))}
@@ -589,11 +612,38 @@ function platformBar() {
   const plat = opts.length <= 2 ? "" // only one platform – nothing to switch
     : `<div class="tabs srcbar" id="srcBar" role="group" aria-label="Platform">${opts.map(([k, label, n]) =>
       `<button data-src="${k}" class="${k === cur ? "on" : ""}" aria-pressed="${k === cur}">${label} <span class="muted">${n}</span></button>`).join("")}</div>`;
-  const avail = opts.find(([k]) => k === cur)?.[2] ?? full.length;
+  const seasonNow = cur === "faceit" ? seasonDef(state.season) : null;
+  const avail = seasonNow ? full.filter((m) => m.source === "faceit").filter(inSeason(seasonNow)).length : opts.find(([k]) => k === cur)?.[2] ?? full.length;
   const presets = [0, ...LAST_N.filter((n) => n < avail)];
   const lastBar = presets.length <= 1 ? "" : `<div class="tabs srcbar" id="lastBar" role="group" aria-label="Matches">${presets.map((n) =>
     `<button data-last="${n}" class="${n === state.lastN ? "on" : ""}" aria-pressed="${n === state.lastN}">${n ? `Last ${n}` : `All <span class="muted">${avail}</span>`}</button>`).join("")}</div>`;
-  return plat || lastBar ? `<div class="srcbars">${plat}${lastBar}</div>` : "";
+  // FACEIT seasons: matches loaded so far per season; ↻ = older matches get fetched when picked
+  const faceitMs = full.filter((m) => m.source === "faceit");
+  const seasonBar = cur !== "faceit" ? "" : `<div class="tabs srcbar" id="seasonBar" role="group" aria-label="FACEIT season">
+    <button data-season="" class="${!state.season ? "on" : ""}" aria-pressed="${!state.season}">All seasons</button>
+    ${SEASONS.map((s, i) => { const n = faceitMs.filter(inSeason(s)).length, more = seasonNeedsMore(state.data, s);
+      return `<button data-season="${s.id}" class="${state.season === s.id ? "on" : ""}" aria-pressed="${state.season === s.id}" title="${esc(s.name)}: ${s.start.slice(0, 10)} – ${s.end ? s.end.slice(0, 10) : "now"}${more ? " · click to load the older matches" : ""}">${esc(s.short || s.name.replace("Season ", "S"))}${i === 0 ? " <span class=\"muted\">now</span>" : ""} <span class="muted">${more ? (n ? `${n}+ ↻` : "↻") : n}</span></button>`; }).join("")}</div>`;
+  const err = state.seasonError ? `<div class="muted" style="font-size:12px;color:var(--bad,#e34948)">${esc(state.seasonError)}</div>` : "";
+  state.seasonError = "";
+  return plat || lastBar || seasonBar ? `<div class="srcbars">${plat}${seasonBar}${lastBar}</div>${err}` : "";
+}
+
+/** Pick a season; first fetch older FACEIT matches when the season goes back further than what's loaded. */
+async function pickSeason(id) {
+  state.season = id; state.histPage = 0;
+  const u = new URL(location.href);
+  if (id) u.searchParams.set("season", id); else u.searchParams.delete("season");
+  history.replaceState(null, "", u);
+  const s = seasonDef(id);
+  if (s && seasonNeedsMore(state.data, s)) {
+    const bar = $("#seasonBar");
+    if (bar) bar.innerHTML = `<span class="muted" style="padding:5px 10px;font-size:12px">Loading ${esc(s.name)} matches from FACEIT…</span>`;
+    try {
+      const d = await api(`/api/player?snap=0&since=${encodeURIComponent(s.start)}&q=${encodeURIComponent(state.data.steam64 || $("#q").value)}`);
+      if (d && d.steam64 === state.data.steam64) state = { ...state, data: d };
+    } catch (e) { state.seasonError = `Couldn't load older matches: ${e.message}`; }
+  }
+  renderView();
 }
 
 function bindPlatformBar() {
@@ -605,6 +655,7 @@ function bindPlatformBar() {
     history.replaceState(null, "", u);
     renderView();
   }));
+  $("#seasonBar")?.querySelectorAll("[data-season]").forEach((b) => (b.onclick = () => pickSeason(b.dataset.season)));
   $("#lastBar")?.querySelectorAll("[data-last]").forEach((b) => (b.onclick = () => {
     state.lastN = +b.dataset.last;
     state.histPage = 0;

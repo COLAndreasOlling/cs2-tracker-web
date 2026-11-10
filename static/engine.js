@@ -153,7 +153,8 @@ const Engine = (() => {
     return faceitGet(`/players/${hit.player_id}`, key);
   }
 
-  async function fetchFaceit(ident, cfg, light = false) {
+  const FACEIT_MAX_PAGES = 20; // 2,000 matches at most, even for "everything"
+  async function fetchFaceit(ident, cfg, light = false, since = null) {
     const key = cfg.faceit_api_key;
     if (!key) return { available: false, reason: SITE_LOCKED_KEY ? "Sign in (top right) to include FACEIT data." : "No FACEIT API key set (⚙ Settings)." };
     let player;
@@ -172,11 +173,14 @@ const Engine = (() => {
     const raw = { available: true, player, stats: null, matches: [], errors: [] };
     try { raw.stats = await faceitGet(`/players/${pid}/stats/cs2`, key); }
     catch (e) { raw.errors.push(`lifetime stats: ${e.message}`); }
-    try {
-      for (const offset of [0, 100]) {
-        const page = (await faceitGet(`/players/${pid}/games/cs2/stats`, key, { offset, limit: 100 })).items || [];
+    try { // the latest 200 matches; with `since`, keep paging back until that date (a season start)
+      raw.complete = false; raw.since = since;
+      for (let pg = 0; pg < (since ? FACEIT_MAX_PAGES : 2); pg++) {
+        const page = (await faceitGet(`/players/${pid}/games/cs2/stats`, key, { offset: pg * 100, limit: 100 })).items || [];
         raw.matches.push(...page);
-        if (page.length < 100) break;
+        if (page.length < 100) { raw.complete = true; break; }
+        const last = page[page.length - 1], at = iso(pick(last.stats || last, "Match Finished At", "Updated At", "Created At"));
+        if (since && at && at < since) break;
       }
     } catch (e) { raw.errors.push(`match stats: ${e.message}`); }
     try { raw.bans = (await faceitGet(`/players/${pid}/bans`, key, { limit: 20 })).items || []; }
@@ -276,6 +280,8 @@ const Engine = (() => {
         matches: num(pick(st, "Matches")), winrate: num(pick(st, "Win Rate %")),
         kd: num(pick(st, "Average K/D Ratio", "K/D Ratio")), hs: num(pick(st, "Average Headshots %", "Total Headshots %")),
         adr: num(pick(st, "ADR")),
+        entry_rate: num(pick(st, "Entry Rate")), total_entry_count: num(pick(st, "Total Entry Count")),
+        total_rounds_ext: num(pick(st, "Total Rounds with extended stats")),
       };
     }
     const ctxById = Object.fromEntries((raw.history || []).map((h) => [h.match_id, historyContext(h, p.player_id)]).filter(([, c]) => c));
@@ -320,6 +326,8 @@ const Engine = (() => {
       // null = couldn't check; [] = checked, no bans
       bans: raw.bans == null ? null : raw.bans.map((b) => ({ reason: b.reason, type: b.type, game: b.game, starts_at: b.starts_at, ends_at: b.ends_at })),
       maps, matches,
+      // how far back the per-match list goes: the oldest match loaded, and whether that's all of them
+      matches_oldest: matches.length ? matches[matches.length - 1].date : null, matches_complete: !!raw.complete, matches_since: raw.since || null,
     };
   }
 
@@ -796,7 +804,7 @@ const Engine = (() => {
   }
 
   /* -------------------------------------------------------------- views --- */
-  async function lookup(q, record = true, light = false) {
+  async function lookup(q, record = true, light = false, since = null) {
     const cfg = loadConfig();
     if (["demo", "demo-faceit"].includes(q.trim().toLowerCase())) {
       let [fr, lrw] = demoRaw();
@@ -806,7 +814,7 @@ const Engine = (() => {
       return s;
     }
     const ident = resolveQuery(q, cfg);
-    const fc = normalizeFaceit(await fetchFaceit(ident, cfg, light));
+    const fc = normalizeFaceit(await fetchFaceit(ident, cfg, light, since));
     const steam64 = ident.steam64 || (fc.available ? fc.steam64 : null);
     if (!steam64) throw new ApiError(404, fc.available ? `FACEIT account "${fc.nickname}" has no CS2 profile linked.` : fc.reason || "Could not determine the player's Steam64 ID.");
     const lt = normalizeLeetify(await fetchLeetify(steam64, cfg), steam64);
@@ -829,7 +837,7 @@ const Engine = (() => {
     const u = new URL(path, "http://x/");
     const body = opts.body ? JSON.parse(opts.body) : {};
     switch (`${opts.method || "GET"} ${u.pathname}`) {
-      case "GET /api/player": return lookup(u.searchParams.get("q") || "", u.searchParams.get("snap") !== "0", u.searchParams.get("light") === "1");
+      case "GET /api/player": return lookup(u.searchParams.get("q") || "", u.searchParams.get("snap") !== "0", u.searchParams.get("light") === "1", u.searchParams.get("since") || null);
       case "GET /api/tracked": return trackedPlayers();
       case "GET /api/config": return configView();
       case "POST /api/config": {
