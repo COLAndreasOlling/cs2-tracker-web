@@ -228,6 +228,8 @@ const Analysis = (() => {
       clutch_1v1: clutch && clutch.b >= 5 ? (100 * clutch.a) / clutch.b : null,
       // last alive: rounds that ended as a 1v1 or 1v2 for the player (FACEIT doesn't count 1v3+), per round
       flash_assist_pr: ex.length ? ratio(sum(e("flash_assist")), exRounds) : null, // Leetify: a teammate killed an enemy you flashed
+      he_dmg_pr: ex.length ? ratio(sum(ex.map((m) => (m.ext.he_dmg_avg || 0) * (m.ext.he_thrown || 0))), exRounds) : null, // Leetify: HE damage per round
+      trade_kill_share: ex.length && sum(ex.map((m) => m.kills || 0)) >= 50 ? ratio(sum(e("trade_succ")), sum(ex.map((m) => m.kills || 0))) : null, // share of own kills that trade a teammate
       last_alive_pr: per((m) => (fxOf(m)?.v1_count != null ? fxOf(m).v1_count + (fxOf(m).v2_count || 0) : null)),
       sniper_share: (() => { const s = pairSum(rows, (m) => fxOf(m)?.sniper_kills, (m) => m.kills); return s && s.b >= 50 ? s.a / s.b : null; })(),
       preaim: mean(ms.map((m) => m.aim_preaim)),
@@ -573,11 +575,10 @@ const Analysis = (() => {
   const inv = (v) => (v == null ? null : 1 - v); // "lower is more typical" signals, keeping null = unknown
   const ROLE_INFO = {
     awper: { name: "AWPer", blurb: "Takes a large share of the team's kills with the AWP and holds long angles." },
-    entry: { name: "Entry fragger", blurb: "First into the site – takes opening duels and dies where teammates can trade." },
-    anchor: { name: "Anchor / solo first contact", blurb: "Takes many first duels, but without a teammate close enough to trade – typical for a CT site anchor or an aggressive solo player." },
-    support: { name: "Support", blurb: "Utility-heavy: flashes and smokes for teammates, assists more than average." },
-    lurker: { name: "Lurker", blurb: "Plays away from the team, catches rotations, and survives rounds alone." },
-    rifler: { name: "Second rifle / trader", blurb: "Follows the entry and trades – a steady fragger who isn't first in." },
+    entry: { name: "Entry fragger", blurb: "First into the fight – takes the round's opening duels (won or lost), with teammates close enough to trade." },
+    support: { name: "Support", blurb: "Utility that works for the team: flashes that blind enemies and set up teammates' kills, grenade damage, little utility wasted." },
+    lurker: { name: "Lurker", blurb: "Plays away from the team – rarely near a teammate when either of them dies." },
+    rifler: { name: "Second rifle / trader", blurb: "Plays close behind teammates and trades them – swings when a teammate falls, and many of their kills are trades." },
   };
 
   const ENTRY_AVG = 0.2; // one opening duel per team per round, shared by 5 players
@@ -634,36 +635,42 @@ const Analysis = (() => {
     const entryRate = p.entry_rate ?? frac(life.entry_rate);
     const tradeSuccess = d.leetify?.stats?.trade_kills_success_percentage ?? null;
     const sig = { tradeOpp: p.trade_opp_pr, tradedOpp: p.traded_opp_pr, survival: p.survival, util: p.util_pr, enemiesFlashed: p.blinded_pr,
-      kpr: p.kpr, apr: p.apr, adr: p.adr, lastAlive: p.last_alive_pr, flashAssist: p.flash_assist_pr, tradeAtt: p.trade_att, snowball: p.snowball };
+      kpr: p.kpr, apr: p.apr, adr: p.adr, lastAlive: p.last_alive_pr, flashAssist: p.flash_assist_pr, tradeAtt: p.trade_att, snowball: p.snowball,
+      tradedPerDeath: p.traded_per_death, tradeShare: p.trade_kill_share, flashEff: p.flash_eff, flashTeam: p.flash_team,
+      utilDmg: p.util_dmg, heDmg: p.he_dmg_pr, utilDeath: p.util_death };
 
     const why = (label, value) => ({ label, value });
     const pct = (v) => `${Math.round(v)}%`, f2 = (v) => v.toFixed(2);
     const known = (label, v, f) => (v == null || Number.isNaN(v) ? [] : [why(label, f(v))]);
-    const hasTrade = sig.tradedOpp != null;
+    // Each role has its own signals (no signal is shared between roles, the aggression meter and the tags), and
+    // nothing that rises with skill (kills, ADR, rounds survived, duels won) - a role is a job, not a level.
+    // Ranges calibrated on real Leetify profiles: flash assists 0.015-0.07 per round, enemies blinded per flash 0.5-0.7,
+    // teammates 0.3-0.5, trades 17-21% of own kills, swings for the trade 81-89%, near a dying teammate 0.26-0.39 per round.
+    const hasTrade = sig.tradedPerDeath != null;
+    const utilDmg = sig.utilDmg != null ? lin(sig.utilDmg, 3, 9) : lin(sig.heDmg, 1.5, 5); // FACEIT (HE + molotov) or Leetify (HE)
     const scores = {
-      awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.3), 0.9], [lin(sig.survival, 25, 45), 0.1]]),
-      // one opening duel per team per round => the average player's entry rate is ~0.20; score above that
-      // FACEIT's "entries" are the round's first duels on BOTH sides, so a CT anchor collects them too. With
-      // Leetify trade data the two separate: an entry dies where teammates can trade, an anchor mostly alone.
+      awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.3), 1]]),
+      // FACEIT's "entries" are the round's first duels on both sides, taken - won or lost. An entry dies where teammates
+      // can trade (Leetify); someone who takes them alone is the Lone wolf tag, not this role.
       entry: hasTrade
-        ? weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.45], [lin(sig.tradedOpp, 0.2, 0.32), 0.4], [inv(lin(sig.survival, 22, 40)), 0.15]])
-        : weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.75], [inv(lin(sig.survival, 22, 40)), 0.25]]),
-      anchor: hasTrade && entryRate != null
-        ? weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.45], [inv(lin(sig.tradedOpp, 0.1, 0.22)), 0.4], [lin(sig.survival, 22, 40), 0.15]])
-        : null,
-      support: weighted([[lin(sig.util, 0.9, 2.4), 0.35], [lin(sig.enemiesFlashed, 0.2, 0.9), 0.25], [lin(sig.apr, 0.08, 0.22), 0.2], [inv(lin(sig.kpr, 0.55, 0.95)), 0.2]]),
-      lurker: weighted([[inv(lin(sig.tradeOpp, 0.2, 0.5)), 0.4], [inv(lin(sig.tradedOpp, 0.1, 0.3)), 0.3], [lin(sig.survival, 25, 45), 0.3], [inv(lin(entryRate, ENTRY_AVG - 0.08, ENTRY_AVG + 0.02)), 0.35]]),
-      rifler: weighted([[lin(sig.tradeOpp, 0.22, 0.5), 0.5], [lin(tradeSuccess, 40, 65), 0.3], [lin(sig.kpr, 0.6, 0.95), 0.2], [lin(sig.adr, 70, 95), 0.3]]),
+        ? weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.6], [lin(sig.tradedPerDeath, 0.3, 0.45), 0.4]])
+        : weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 1]]),
+      // useful utility, not utility thrown: grenade count is only a small part
+      support: weighted([[lin(sig.flashAssist, 0.015, 0.06), 0.3], [lin(sig.flashEff, 0.4, 0.75), 0.2], [utilDmg, 0.2],
+        [inv(lin(sig.flashTeam, 0.3, 0.6)), 0.1], [inv(lin(sig.utilDeath, 150, 350)), 0.1], [lin(sig.util, 1.2, 2.6), 0.1]]),
+      lurker: hasTrade ? weighted([[inv(lin(sig.tradeOpp, 0.2, 0.36)), 0.5], [inv(lin(sig.tradedPerDeath, 0.2, 0.38)), 0.5]]) : null,
+      rifler: hasTrade ? weighted([[lin(sig.tradeOpp, 0.25, 0.42), 0.35], [lin(sig.tradeAtt, 75, 92), 0.3], [lin(sig.tradeShare, 0.14, 0.26), 0.35]]) : null,
     };
     const reasons = {
-      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles (last 30 days count most)", pct(100 * sniperShare)), ...(awpRecent != null ? [why("… in the last 10 days", pct(100 * awpRecent))] : []), ...(sniperShareAll != null ? [why("… over all matches", pct(100 * sniperShareAll))] : []), ...known("Rounds survived", sig.survival, pct)],
-      entry: [...known("First duels per round, CT and T (FACEIT; ~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (high = team right behind)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)],
-      anchor: hasTrade && entryRate != null
-        ? [...known("First duels per round, CT and T (~0.20 is average)", entryRate, f2), ...known("Deaths in tradeable spots per round (low = fights alone)", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct)]
-        : [why("Needs Leetify trade data", "to tell an anchor from an entry fragger")],
-      support: [...known("Grenades per round", sig.util, f2), ...known("Enemies flashed per round", sig.enemiesFlashed, f2), ...known("Assists per round", sig.apr, f2), ...known("Kills per round", sig.kpr, f2)],
-      lurker: [...known("Trade chances per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths in tradeable spots per round", sig.tradedOpp, f2), ...known("Rounds survived", sig.survival, pct), ...known("Entry attempts per round (low = not first in; ~0.20 is average)", entryRate, f2)],
-      rifler: [...known("Trade chances per round", sig.tradeOpp, f2), ...known("Trade kill success", tradeSuccess, pct), ...known("Kills per round", sig.kpr, f2), ...known("ADR", sig.adr, (v) => v.toFixed(1))],
+      awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles (last 30 days count most)", pct(100 * sniperShare)), ...(awpRecent != null ? [why("… in the last 10 days", pct(100 * awpRecent))] : []), ...(sniperShareAll != null ? [why("… over all matches", pct(100 * sniperShareAll))] : [])],
+      entry: [...known("First duels taken per round, won or lost (~0.20 is average)", entryRate, f2), ...known("Deaths with a teammate close enough to trade (~35% is typical)", sig.tradedPerDeath, (v) => pct(100 * v))],
+      support: [...known("Flash assists per round (teammate kills an enemy you flashed)", sig.flashAssist, (v) => v.toFixed(3)), ...known("Enemies blinded per flash", sig.flashEff, f2),
+        ...(sig.utilDmg != null ? known("Grenade damage per round (HE + molotov)", sig.utilDmg, (v) => v.toFixed(1)) : known("HE damage per round", sig.heDmg, (v) => v.toFixed(1))),
+        ...known("Teammates blinded per flash (low = good)", sig.flashTeam, f2), ...known("Utility unused at death (low = good)", sig.utilDeath, (v) => `$${Math.round(v)}`), ...known("Grenades thrown per round", sig.util, f2)],
+      lurker: hasTrade ? [...known("Times right behind a teammate who dies, per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths with a teammate close enough to trade (low = alone)", sig.tradedPerDeath, (v) => pct(100 * v))]
+        : [why("Needs Leetify trade data", "to see who plays away from the team")],
+      rifler: hasTrade ? [...known("Times right behind a teammate who dies, per round", sig.tradeOpp, f2), ...known("Swings for the trade", sig.tradeAtt, pct), ...known("Kills that trade a teammate", sig.tradeShare, (v) => pct(100 * v))]
+        : [why("Needs Leetify trade data", "to see who trades their teammates")],
     };
     // AWP usage decides: AWP picks count as FACEIT "entries", so a star AWPer also has a high entry score.
     // When a large share of kills come from sniper rifles, the AWP role wins and aggression becomes a trait.
@@ -688,8 +695,7 @@ const Analysis = (() => {
     if (sig.kpr >= 0.85) traits.push("High fragger");
     if (lr.ct != null && lr.t != null && Math.abs(lr.ct - lr.t) >= 2.5) traits.push(lr.ct > lr.t ? "Stronger on CT" : "Stronger on T");
     if (sniperShare == null) traits.push("AWP use unknown (no FACEIT sniper data)");
-    const firstContact = Math.max(scores.entry ?? 0, scores.anchor ?? 0); // first duels, traded or alone
-    if (isAwper && firstContact >= ROLE_MIN) traits.push("Aggressive AWP – takes opening picks");
+    if (isAwper && (scores.entry ?? 0) >= ROLE_MIN) traits.push("Aggressive AWP – takes opening picks");
     if (isAwper && scores.lurker != null && scores.lurker >= ROLE_MIN) traits.push("Passive AWP – holds angles away from the team");
     if (!isAwper && sniperShare != null && sniperShare >= 0.12) traits.push("Part-time AWPer");
     if (awpRecent != null && awpBefore != null && awpRecent - awpBefore >= 0.12)
@@ -705,7 +711,6 @@ const Analysis = (() => {
     const inFront = p.traded_per_death != null ? p.traded_per_death * 0.68 : null;
     const frontShare = inFront != null && sig.tradeOpp != null && inFront + sig.tradeOpp > 0 ? inFront / (inFront + sig.tradeOpp) : null;
     const tags = [];
-    const quietEarly = inv(lin(entryRate, 0.12, 0.22)); // rarely in the round's first duels
     // baiters also keep their utility to themselves: few grenades (they give away a position) and few flashes for teammates
     const lowUtil = inv(lin(sig.util, 1.0, 1.8)), lowFlashForTeam = inv(lin(sig.flashAssist, 0.01, 0.035)); // real players: ~1.8–1.9 grenades, 0.02–0.03 flash assists per round
     // Baiting, precisely: standing right behind a teammate when they die (Leetify only counts it when the player is close
@@ -724,24 +729,15 @@ const Analysis = (() => {
           detail: `${facts}, and they shoot back at the killer only ${pct(swing)} of the time (~85% is typical)${selfishUtil ? `. Keeps utility to themselves (${utilFacts})` : ""}. Lurking or waiting on another site doesn't count – only being right behind the teammate who dies.`,
           mate: "As a teammate: don't count on the trade – peek with them, not in front of them.",
           opp: "As an opponent: the first player you kill is often left alone – take the duel, then reposition." });
-      else if (swing >= 85)
-        tags.push({ id: "second", tone: "info", name: "Plays second – trades others", score: bait,
-          detail: `${facts}, but they swing for the trade ${pct(swing)} of the time – a second-in player, not a baiter.`,
-          mate: "As a teammate: a good partner to entry with – make sure someone else is willing to go first.",
-          opp: "As an opponent: after you get the opening kill, expect them right behind – reset your crosshair for the trade." });
     }
-    const passive = weighted([[quietEarly, 0.25], [lin(sig.survival, 30, 45), 0.25], [inv(lin(sig.adr, 65, 85)), 0.15], [inv(lin(sig.tradeOpp, 0.2, 0.4)), 0.15], [lin(sig.lastAlive, 0.04, 0.07), 0.2]]);
-    if (!isAwper && passive != null && passive >= TAG_MIN)
-      tags.push({ id: "passive", tone: "info", name: "Passive – plays for the late round", score: passive,
-        detail: `Rarely in the first duels (${f2(entryRate ?? 0)} per round), survives ${pct(sig.survival)} of rounds, ${sig.adr != null ? `ADR ${sig.adr.toFixed(0)}` : "low damage"}${sig.tradeOpp != null ? `, often away from teammates (${f2(sig.tradeOpp)} trade chances per round)` : ""} – quiet early, alive late.`,
-        mate: "As a teammate: they won't open rounds – plan the early round without them and use them for late flanks and retakes.",
-        opp: "As an opponent: expect slow rounds, held angles and late flanks – check behind you after the bomb plant, and don't waste time waiting them out." });
-    // Lone wolf, precisely: plays away from the team - when they die nobody is close enough to trade them, and they are
-    // rarely close when a teammate dies. Position only; skill doesn't enter it (deaths are counted per death).
-    const tradeablePerDeath = p.traded_per_death; // share of their deaths with a teammate right behind (~0.35 typical)
-    if (!isAwper && !tags.some((t) => t.id === "bait") && tradeablePerDeath != null && nearDeaths != null && tradeablePerDeath < 0.2 && nearDeaths < 0.22)
+    // Lone wolf, precisely: away from the team AND takes the round's first fights there - when they die nobody is close
+    // enough to trade, and they're in the first duel at least as often as average. A lurker (away from the team but
+    // waiting for a timing) doesn't get it. Position and choices only; skill doesn't enter it (deaths counted per death).
+    const tradeablePerDeath = p.traded_per_death; // share of their deaths with a teammate right behind (~35% typical)
+    if (!isAwper && !tags.some((t) => t.id === "bait") && tradeablePerDeath != null && nearDeaths != null && entryRate != null
+      && tradeablePerDeath < 0.25 && nearDeaths < 0.25 && entryRate >= ENTRY_AVG)
       tags.push({ id: "lone", tone: "bad", name: "Lone wolf", score: null,
-        detail: `Only ${pct(100 * tradeablePerDeath)} of their deaths have a teammate close enough to trade (~35% is typical), and a teammate dies right in front of them just ${f2(nearDeaths)} times per round${selfishUtil ? `. Keeps utility to themselves (${utilFacts})` : ""}.`,
+        detail: `Takes ${f2(entryRate)} of the round's first duels per round (~0.20 is average), but only ${pct(100 * tradeablePerDeath)} of their deaths have a teammate close enough to trade (~35% is typical), and a teammate dies right in front of them just ${f2(nearDeaths)} times per round${selfishUtil ? `. Keeps utility to themselves (${utilFacts})` : ""} – first contact, alone.`,
         mate: "As a teammate: don't build the round around them – they play their own angle. Ask for one flash or one info call per round.",
         opp: "As an opponent: they're often isolated – find them alone and they have no trade behind them." });
 
@@ -790,7 +786,7 @@ const Analysis = (() => {
     }
 
     return {
-      available: true, basis: `${basis}, ${recentN} of them in the last 30 days (weighted by age: last 10 days 45%, 11–20 days 25%, 21–30 days 15%, older 15%)`, confidence, traits, ranked, tags, tagScores: { bait, passive }, aggression,
+      available: true, basis: `${basis}, ${recentN} of them in the last 30 days (weighted by age: last 10 days 45%, 11–20 days 25%, 21–30 days 15%, older 15%)`, confidence, traits, ranked, tags, tagScores: { bait }, aggression,
       primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
       secondary: !flexible && !isAwper && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
     };
@@ -1203,7 +1199,7 @@ const Analysis = (() => {
   /* ---------------------------------------------------------------- team --- */
   // A 5-stack: roster (role, form, impact), a suggested role split, the stack's map pool with
   // shrunk win rates (small samples pull towards 50%), and the matches they actually played together.
-  const TEAM_ROLES = [["awper", "AWPer"], ["entry", "Entry"], ["support", "Support"], ["lurker", "Lurker / anchor"], ["rifler", "Second rifle"]];
+  const TEAM_ROLES = [["awper", "AWPer"], ["entry", "Entry"], ["support", "Support"], ["lurker", "Lurker"], ["rifler", "Second rifle"]];
   const shrunk = (wins, n, prior = 10) => (100 * (wins + prior * 0.5)) / (n + prior); // win % pulled towards 50% when n is small
 
   function team(players) {
@@ -1215,7 +1211,6 @@ const Analysis = (() => {
       const formDiff = recent ? recent[0] - recent[1] : null, formUnit = fr.length >= 15 ? "faceit" : "leetify";
       const form = formDiff == null ? "unknown" : formDiff >= (formUnit === "faceit" ? 0.08 : 1) ? "hot" : formDiff <= -(formUnit === "faceit" ? 0.08 : 1) ? "cold" : "steady";
       const scores = Object.fromEntries((r.ranked || []).map((x) => [x.id, x.score]));
-      if (scores.anchor != null) scores.lurker = Math.max(scores.lurker ?? 0, scores.anchor); // anchors and lurkers fill the same slot
       return { d, name: d.identity?.name, role: r, scores, impact: k.available ? k.verdict : null, form, formDiff, formUnit, score: d.score,
         level: d.faceit?.available ? d.faceit.level : d.leetify?.ranks?.faceit, elo: d.faceit?.available ? d.faceit.elo : d.leetify?.ranks?.faceit_elo };
     });
@@ -1280,7 +1275,7 @@ const Analysis = (() => {
     const sup = assignment.find((a) => a.role === "support");
     if (sup && sup.fit != null && sup.fit >= 55) add(S, "A real support player", `${sup.player} uses a lot of utility for the team.`);
     const tagged = (id) => roster.filter((p) => p.role.tags?.some((t) => t.id === id));
-    const baiters = tagged("bait"), passives = tagged("passive");
+    const baiters = tagged("bait"), passives = roster.filter((p) => p.role.aggression?.score != null && p.role.aggression.score < 35); // "Passive" / "Very passive" on the meter
     if (baiters.length) add(W, `Baits without trading: ${baiters.map((p) => p.name).join(", ")}`, "Often right behind a teammate who dies, but rarely gets the trade.",
       "Pair them with someone who calls the peek – swing together, not one after the other. Against you: take the first duel, the trade often doesn't come.");
     if (passives.length >= 2) add(W, `Slow line-up: ${passives.map((p) => p.name).join(", ")}`, `${passives.length} players who stay quiet early and play for the late round.`,
