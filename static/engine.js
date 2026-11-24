@@ -83,16 +83,26 @@ const Engine = (() => {
   }
 
   /* --------------------------------------------------------------- http --- */
-  async function httpGet(url, headers = {}) {
+  const inflight = new Map(); // url -> promise, so parallel callers share one request
+  function httpGet(url, headers = {}) {
     const hit = cache.get(url);
-    if (hit && Date.now() - hit.t < CACHE_TTL) return hit.data;
-    let r;
-    try { r = await fetch(url, { headers }); }
-    catch (e) { throw new ApiError(0, `Network error reaching ${new URL(url).host}`); }
-    if (!r.ok) throw new ApiError(r.status, `HTTP ${r.status} from ${new URL(url).host}`);
-    const data = await r.json();
-    cache.set(url, { t: Date.now(), data });
-    return data;
+    if (hit && Date.now() - hit.t < CACHE_TTL) return Promise.resolve(hit.data);
+    if (!inflight.has(url)) {
+      inflight.set(url, (async () => {
+        let r;
+        for (let attempt = 0; ; attempt++) {
+          try { r = await fetch(url, { headers }); }
+          catch (e) { throw new ApiError(0, `Network error reaching ${new URL(url).host}`); }
+          if (r.status !== 429 || attempt) break;
+          await new Promise((res) => setTimeout(res, 1200)); // rate limited: one retry
+        }
+        if (!r.ok) throw new ApiError(r.status, `HTTP ${r.status} from ${new URL(url).host}`);
+        const data = await r.json();
+        cache.set(url, { t: Date.now(), data });
+        return data;
+      })().finally(() => inflight.delete(url)));
+    }
+    return inflight.get(url);
   }
   const qs = (p) => (p && Object.keys(p).length ? "?" + new URLSearchParams(p) : "");
   const faceitGet = (path, key, params) => httpGet(FACEIT_BASE + path + qs(params), { Authorization: `Bearer ${key}` });
@@ -171,6 +181,14 @@ const Engine = (() => {
     }
     const pid = player.player_id;
     const raw = { available: true, player, stats: null, matches: [], errors: [] };
+    // everything below only needs the player id: start it all at once (the loops further down pick up
+    // these requests instead of sending them again)
+    const warm = (path, params) => faceitGet(path, key, params).catch(() => null);
+    if (!since) warm(`/players/${pid}/games/cs2/stats`, { offset: 100, limit: 100 });
+    warm(`/players/${pid}/history`, { game: "cs2", offset: 0, limit: 100 });
+    warm(`/players/${pid}/history`, { game: "cs2", offset: 100, limit: 100 });
+    warm(`/players/${pid}/bans`, { limit: 20 });
+    warm(`/players/${pid}/stats/cs2`);
     try { raw.stats = await faceitGet(`/players/${pid}/stats/cs2`, key); }
     catch (e) { raw.errors.push(`lifetime stats: ${e.message}`); }
     try { // the latest 200 matches; with `since`, keep paging back until that date (a season start)
@@ -355,6 +373,7 @@ const Engine = (() => {
   /* ------------------------------------------------------------ Leetify --- */
   async function fetchLeetify(steam64, cfg) {
     const key = cfg.leetify_api_key;
+    leetifyGet("/v3/profile/matches", key, { steam64_id: steam64 }).catch(() => null); // in parallel with the profile
     let profile;
     try { profile = await leetifyGet("/v3/profile", key, { steam64_id: steam64 }); }
     catch (e) {
@@ -835,10 +854,11 @@ const Engine = (() => {
       return s;
     }
     const ident = resolveQuery(q, cfg);
+    const early = ident.steam64 ? fetchLeetify(ident.steam64, cfg) : null; // no need to wait for FACEIT
     const fc = normalizeFaceit(await fetchFaceit(ident, cfg, light, since));
     const steam64 = ident.steam64 || (fc.available ? fc.steam64 : null);
     if (!steam64) throw new ApiError(404, fc.available ? `FACEIT account "${fc.nickname}" has no CS2 profile linked.` : fc.reason || "Could not determine the player's Steam64 ID.");
-    const lt = normalizeLeetify(await fetchLeetify(steam64, cfg), steam64);
+    const lt = normalizeLeetify(await (early || fetchLeetify(steam64, cfg)), steam64);
     if (!fc.available && !lt.available) throw new ApiError(404, `No data. FACEIT: ${fc.reason}  Leetify: ${lt.reason}`);
     const s = buildSummary(fc, lt, steam64);
     s.history = record ? recordSnapshot(s).snapshots : allSnapshots()[steam64]?.snapshots || [];
