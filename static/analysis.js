@@ -583,7 +583,8 @@ const Analysis = (() => {
 
   const ENTRY_AVG = 0.2; // one opening duel per team per round, shared by 5 players
   const TAG_MIN = 65; // playstyle tags only when the pattern is strong
-  const ROLE_MIN = 55; // a role is only named when its score clearly stands out
+  const ROLE_MIN = 55; // a role fit this high counts as playing it (traits, team role split)
+  const POINTS_FLOOR = 25; // a role fit at or below this gets no share of the 100 role points
   const MAP_SHARE_MIN = 0.15; // map tips only for maps that are at least this share of your Active Duty games
   const AWP_SHARE = 0.22; // share of kills with sniper rifles that makes someone the team's AWPer
   // how much a match counts towards the role, by age in days: [up to N days, weight]
@@ -647,19 +648,20 @@ const Analysis = (() => {
     // Ranges calibrated on real Leetify profiles: flash assists 0.015-0.07 per round, enemies blinded per flash 0.5-0.7,
     // teammates 0.3-0.5, trades 17-21% of own kills, swings for the trade 81-89%, near a dying teammate 0.26-0.39 per round.
     const hasTrade = sig.tradedPerDeath != null;
-    const utilDmg = sig.utilDmg != null ? lin(sig.utilDmg, 3, 9) : lin(sig.heDmg, 1.5, 5); // FACEIT (HE + molotov) or Leetify (HE)
+    const utilDmg = sig.utilDmg != null ? lin(sig.utilDmg, 2, 9) : lin(sig.heDmg, 1.5, 5.5); // FACEIT (HE + molotov) or Leetify (HE)
     const scores = {
       awper: sniperShare == null ? null : weighted([[lin(sniperShare, 0.08, 0.3), 1]]),
       // FACEIT's "entries" are the round's first duels on both sides, taken - won or lost. An entry dies where teammates
       // can trade (Leetify); someone who takes them alone is the Lone wolf tag, not this role.
       entry: hasTrade
-        ? weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 0.6], [lin(sig.tradedPerDeath, 0.3, 0.45), 0.4]])
-        : weighted([[lin(entryRate, ENTRY_AVG - 0.02, ENTRY_AVG + 0.12), 1]]),
-      // useful utility, not utility thrown: grenade count is only a small part
-      support: weighted([[lin(sig.flashAssist, 0.015, 0.06), 0.3], [lin(sig.flashEff, 0.4, 0.75), 0.2], [utilDmg, 0.2],
-        [inv(lin(sig.flashTeam, 0.3, 0.6)), 0.1], [inv(lin(sig.utilDeath, 150, 350)), 0.1], [lin(sig.util, 1.2, 2.6), 0.1]]),
-      lurker: hasTrade ? weighted([[inv(lin(sig.tradeOpp, 0.2, 0.36)), 0.5], [inv(lin(sig.tradedPerDeath, 0.2, 0.38)), 0.5]]) : null,
-      rifler: hasTrade ? weighted([[lin(sig.tradeOpp, 0.25, 0.42), 0.35], [lin(sig.tradeAtt, 75, 92), 0.3], [lin(sig.tradeShare, 0.14, 0.26), 0.35]]) : null,
+        ? weighted([[lin(entryRate, ENTRY_AVG - 0.07, ENTRY_AVG + 0.07), 0.6], [lin(sig.tradedPerDeath, 0.25, 0.45), 0.4]])
+        : weighted([[lin(entryRate, ENTRY_AVG - 0.07, ENTRY_AVG + 0.07), 1]]),
+      // setting up teammates is the job: flash assists carry the most; good flashes and grenade damage that don't
+      // set anyone up count less, and the number of grenades thrown barely counts
+      support: weighted([[lin(sig.flashAssist, 0.005, 0.055), 0.45], [lin(sig.flashEff, 0.45, 0.75), 0.15], [utilDmg, 0.15],
+        [inv(lin(sig.flashTeam, 0.2, 0.55)), 0.1], [inv(lin(sig.utilDeath, 150, 400)), 0.1], [lin(sig.util, 1.2, 2.6), 0.05]]),
+      lurker: hasTrade ? weighted([[inv(lin(sig.tradeOpp, 0.22, 0.42)), 0.5], [inv(lin(sig.tradedPerDeath, 0.25, 0.45)), 0.5]]) : null,
+      rifler: hasTrade ? weighted([[lin(sig.tradeOpp, 0.22, 0.42), 0.35], [lin(sig.tradeAtt, 78, 92), 0.3], [lin(sig.tradeShare, 0.13, 0.25), 0.35]]) : null,
     };
     const reasons = {
       awper: sniperShare == null ? [why("Sniper kills", "no FACEIT sniper data – sign in / add a FACEIT key")] : [why("Kills with sniper rifles (last 30 days count most)", pct(100 * sniperShare)), ...(awpRecent != null ? [why("… in the last 10 days", pct(100 * awpRecent))] : []), ...(sniperShareAll != null ? [why("… over all matches", pct(100 * sniperShareAll))] : [])],
@@ -678,12 +680,24 @@ const Analysis = (() => {
     // without trade data, "entry" just means "takes many first duels" - on CT that's often the site anchor
     const info = (k) => (k === "entry" && !hasTrade ? { name: "First-contact player",
       blurb: "Takes many of the round's first duels – on T that's entrying, on CT it's often the site anchor. Without Leetify trade data the two can't be told apart." } : ROLE_INFO[k]);
-    const ranked = Object.keys(scores).map((k) => ({ id: k, ...info(k), score: scores[k], why: reasons[k] }))
-      .sort((a, b) => (isAwper ? (b.id === "awper") - (a.id === "awper") : 0) || (b.score ?? -1) - (a.score ?? -1));
+    // 100 points split across the roles: each role's fit (0-100, a typical player ~50) counts with what it has above 25
+    // (25 or less = not this role), and the points are each role's share of that - so a clear role takes most of them
+    // and an all-round player spreads them evenly.
+    const excess = Object.fromEntries(Object.keys(scores).map((k) => [k, Math.max(0, (scores[k] ?? 0) - POINTS_FLOOR)]));
+    const totalExcess = Object.values(excess).reduce((a, b) => a + b, 0);
+    const points = Object.fromEntries(Object.keys(scores).map((k) => [k, totalExcess ? (100 * excess[k]) / totalExcess : 0]));
+    { // round to whole points that still add up to 100 (largest remainder)
+      const keys = Object.keys(points), floor = Object.fromEntries(keys.map((k) => [k, Math.floor(points[k])]));
+      let left = totalExcess ? 100 - keys.reduce((a, k) => a + floor[k], 0) : 0;
+      for (const k of [...keys].sort((a, b) => (points[b] - floor[b]) - (points[a] - floor[a]))) { if (left <= 0) break; floor[k]++; left--; }
+      Object.assign(points, floor);
+    }
+    const ranked = Object.keys(scores).map((k) => ({ id: k, ...info(k), score: scores[k], points: scores[k] == null ? null : points[k], why: reasons[k] }))
+      .sort((a, b) => (isAwper ? (b.id === "awper") - (a.id === "awper") : 0) || (b.points ?? -1) - (a.points ?? -1) || (b.score ?? -1) - (a.score ?? -1));
     const [top, second] = ranked;
-    const flexible = !isAwper && (top.score == null || top.score < ROLE_MIN);
-    const gap = top.score != null && second?.score != null ? top.score - second.score : null;
-    const confidence = isAwper ? (sniperShare >= 0.3 ? "clear" : "leaning") : flexible ? "low" : gap >= 15 ? "clear" : "leaning";
+    const flexible = !isAwper && !(top.points >= 35 && top.points - (second?.points ?? 0) >= 10);
+    const gap = second?.points != null ? top.points - second.points : null;
+    const confidence = isAwper ? (sniperShare >= 0.3 ? "clear" : "leaning") : flexible ? "low" : top.points >= 50 ? "clear" : "leaning";
 
     // traits that sit on top of the role
     const lr = d.leetify?.rating || {}, traits = [];
@@ -788,7 +802,7 @@ const Analysis = (() => {
     return {
       available: true, basis: `${basis}, ${recentN} of them in the last 30 days (weighted by age: last 10 days 45%, 11–20 days 25%, 21–30 days 15%, older 15%)`, confidence, traits, ranked, tags, tagScores: { bait }, aggression,
       primary: flexible ? { id: "flex", name: "Flexible rifler", blurb: "No single role stands out – plays a mix of positions." } : top,
-      secondary: !flexible && !isAwper && second?.score != null && second.score >= ROLE_MIN && gap < 15 ? second : null,
+      secondary: !flexible && !isAwper && second?.points != null && second.points >= 25 ? second : null,
     };
   }
 

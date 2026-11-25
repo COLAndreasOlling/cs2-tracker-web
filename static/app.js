@@ -694,8 +694,8 @@ function roleSection(r) {
   if (!r.available) return `<div class="card empty" style="margin-bottom:16px">${esc(r.reason)}</div>`;
   const bar = (x) => `<div class="role-row">
       <div class="role-name">${esc(x.name)}</div>
-      <div class="track"><div class="fill" style="width:${x.score ?? 0}%;background:${css(x.id === r.primary.id ? "--accent" : "--series-1")}"></div></div>
-      <div class="val">${x.score == null ? `<span class="muted">n/a</span>` : x.score}</div>
+      <div class="track" title="${x.score == null ? "" : `Fit ${x.score}/100 (a typical player is ~50)`}"><div class="fill" style="width:${x.points ?? 0}%;background:${css(x.id === r.primary.id ? "--accent" : "--series-1")}"></div></div>
+      <div class="val">${x.points == null ? `<span class="muted">n/a</span>` : `${x.points}<span class="muted" style="font-weight:400;font-size:11px"> pts</span>`}</div>
       <div class="role-why">${x.why.map((w) => `${esc(w.label)}: <b>${esc(w.value)}</b>`).join(" · ")}</div>
     </div>`;
   return `<div class="card" style="margin-bottom:16px">
@@ -707,7 +707,7 @@ function roleSection(r) {
       <div style="font-size:13px;margin-top:6px">${esc(t.detail)}</div><div class="muted" style="font-size:12px;margin-top:4px">${esc(t.mate)}<br>${esc(t.opp)}</div></div>`).join("")}</div>` : ""}
     ${r.traits.length ? `<div class="ranks" style="margin:0 0 14px">${r.traits.map((t) => `<span class="src">${esc(t)}</span>`).join("")}</div>` : ""}
     <div class="role-rows">${r.ranked.map(bar).join("")}</div>
-    <p class="muted" style="font-size:12px;margin:12px 0 0">A statistical estimate from ${esc(r.basis)} – each role scores 0–100 from the stats listed; ranges are rough references, not official. Without FACEIT's sniper-kill stats (sign in), AWP can't be judged.</p>
+    <p class="muted" style="font-size:12px;margin:12px 0 0">A statistical estimate from ${esc(r.basis)} – 100 points split across the roles. Each role first gets a fit of 0–100 from the stats listed (a typical player is ~50; hover a bar to see it); what a role has above 25 decides its share of the points. Ranges are rough references, not official. Without FACEIT's sniper-kill stats (sign in), AWP can't be judged.</p>
   </div>`;
 }
 
