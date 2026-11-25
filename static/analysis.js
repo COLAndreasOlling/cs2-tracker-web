@@ -656,10 +656,18 @@ const Analysis = (() => {
       entry: hasTrade
         ? weighted([[lin(entryRate, ENTRY_AVG - 0.07, ENTRY_AVG + 0.07), 0.6], [lin(sig.tradedPerDeath, 0.25, 0.45), 0.4]])
         : weighted([[lin(entryRate, ENTRY_AVG - 0.07, ENTRY_AVG + 0.07), 1]]),
-      // setting up teammates is the job: flash assists carry the most; good flashes and grenade damage that don't
-      // set anyone up count less, and the number of grenades thrown barely counts
-      support: weighted([[lin(sig.flashAssist, 0.005, 0.055), 0.45], [lin(sig.flashEff, 0.45, 0.75), 0.15], [utilDmg, 0.15],
-        [inv(lin(sig.flashTeam, 0.2, 0.55)), 0.1], [inv(lin(sig.utilDeath, 150, 400)), 0.1], [lin(sig.util, 1.2, 2.6), 0.05]]),
+      // Setting up teammates IS the job, and flash assists measure it directly (a teammate kills an enemy you flashed).
+      // So they gate the role: the fit is the flash-assist level, and the rest (flash quality, grenade damage, few
+      // teammates blinded, little unused utility, grenades thrown) only moves it within 70-100% of that.
+      // No flash assists = no support, however many enemies the flashes blind. Without Leetify (no flash-assist data)
+      // the rest is used alone, at 80%.
+      support: (() => {
+        const rest = weighted([[lin(sig.flashEff, 0.45, 0.75), 0.3], [utilDmg, 0.25], [inv(lin(sig.flashTeam, 0.2, 0.55)), 0.2],
+          [inv(lin(sig.utilDeath, 150, 400)), 0.15], [lin(sig.util, 1.2, 2.6), 0.1]]);
+        const fa = lin(sig.flashAssist, 0.005, 0.055);
+        if (fa == null) return rest == null ? null : Math.round(rest * 0.8);
+        return Math.round(100 * fa * (0.7 + 0.3 * (rest ?? 50) / 100));
+      })(),
       lurker: hasTrade ? weighted([[inv(lin(sig.tradeOpp, 0.22, 0.42)), 0.5], [inv(lin(sig.tradedPerDeath, 0.25, 0.45)), 0.5]]) : null,
       rifler: hasTrade ? weighted([[lin(sig.tradeOpp, 0.22, 0.42), 0.35], [lin(sig.tradeAtt, 78, 92), 0.3], [lin(sig.tradeShare, 0.13, 0.25), 0.35]]) : null,
     };

@@ -707,7 +707,7 @@ function roleSection(r) {
       <div style="font-size:13px;margin-top:6px">${esc(t.detail)}</div><div class="muted" style="font-size:12px;margin-top:4px">${esc(t.mate)}<br>${esc(t.opp)}</div></div>`).join("")}</div>` : ""}
     ${r.traits.length ? `<div class="ranks" style="margin:0 0 14px">${r.traits.map((t) => `<span class="src">${esc(t)}</span>`).join("")}</div>` : ""}
     <div class="role-rows">${r.ranked.map(bar).join("")}</div>
-    <p class="muted" style="font-size:12px;margin:12px 0 0">A statistical estimate from ${esc(r.basis)} – 100 points split across the roles. Each role first gets a fit of 0–100 from the stats listed (a typical player is ~50; hover a bar to see it); what a role has above 25 decides its share of the points. Ranges are rough references, not official. Without FACEIT's sniper-kill stats (sign in), AWP can't be judged.</p>
+    <p class="muted" style="font-size:12px;margin:12px 0 0">A statistical estimate from ${esc(r.basis)} – 100 points split across the roles. Each role first gets a fit of 0–100 from the stats listed (a typical player is ~50; hover a bar to see it); what a role has above 25 decides its share of the points. Support is gated by flash assists: without them, good flashes and grenade damage don't make a support. Ranges are rough references, not official. Without FACEIT's sniper-kill stats (sign in), AWP can't be judged.</p>
   </div>`;
 }
 
