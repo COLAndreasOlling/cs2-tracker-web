@@ -21,11 +21,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  # build and deploy as separate jobs (GitHub's template): deploying right after the upload in the same job
+  # sometimes can't see the artifact yet ("No artifacts named github-pages")
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       # Optional FACEIT keys from repo secrets (Settings -> Secrets and variables -> Actions):
@@ -56,5 +55,12 @@ jobs:
       - uses: actions/upload-pages-artifact@v4
         with:
           path: static
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
