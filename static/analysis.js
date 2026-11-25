@@ -656,18 +656,11 @@ const Analysis = (() => {
       entry: hasTrade
         ? weighted([[lin(entryRate, ENTRY_AVG - 0.07, ENTRY_AVG + 0.07), 0.6], [lin(sig.tradedPerDeath, 0.25, 0.45), 0.4]])
         : weighted([[lin(entryRate, ENTRY_AVG - 0.07, ENTRY_AVG + 0.07), 1]]),
-      // Setting up teammates IS the job, and flash assists measure it directly (a teammate kills an enemy you flashed).
-      // So they gate the role: the fit is the flash-assist level, and the rest (flash quality, grenade damage, few
-      // teammates blinded, little unused utility, grenades thrown) only moves it within 70-100% of that.
-      // No flash assists = no support, however many enemies the flashes blind. Without Leetify (no flash-assist data)
-      // the rest is used alone, at 80%.
-      support: (() => {
-        const rest = weighted([[lin(sig.flashEff, 0.45, 0.75), 0.3], [utilDmg, 0.25], [inv(lin(sig.flashTeam, 0.2, 0.55)), 0.2],
-          [inv(lin(sig.utilDeath, 150, 400)), 0.15], [lin(sig.util, 1.2, 2.6), 0.1]]);
-        const fa = lin(sig.flashAssist, 0.005, 0.055);
-        if (fa == null) return rest == null ? null : Math.round(rest * 0.8);
-        return Math.round(100 * fa * (0.7 + 0.3 * (rest ?? 50) / 100));
-      })(),
+      // Support = making kills easier for teammates. Flash assists measure that directly (a teammate kills an enemy
+      // you flashed) and carry most of the weight; grenade damage softens enemies up for the team's kills. Flash
+      // quality and not blinding your own team count a little. Grenades thrown and utility unused at death are left
+      // out: they say nothing about whether the utility helped. Without Leetify (no flash assists) it can't be judged.
+      support: weighted([[lin(sig.flashAssist, 0.005, 0.055), 0.55], [utilDmg, 0.3], [lin(sig.flashEff, 0.45, 0.75), 0.1], [inv(lin(sig.flashTeam, 0.2, 0.55)), 0.05]]),
       lurker: hasTrade ? weighted([[inv(lin(sig.tradeOpp, 0.22, 0.42)), 0.5], [inv(lin(sig.tradedPerDeath, 0.25, 0.45)), 0.5]]) : null,
       rifler: hasTrade ? weighted([[lin(sig.tradeOpp, 0.22, 0.42), 0.35], [lin(sig.tradeAtt, 78, 92), 0.3], [lin(sig.tradeShare, 0.13, 0.25), 0.35]]) : null,
     };
@@ -676,7 +669,7 @@ const Analysis = (() => {
       entry: [...known("First duels taken per round, won or lost (~0.20 is average)", entryRate, f2), ...known("Deaths with a teammate close enough to trade (~35% is typical)", sig.tradedPerDeath, (v) => pct(100 * v))],
       support: [...known("Flash assists per round (teammate kills an enemy you flashed)", sig.flashAssist, (v) => v.toFixed(3)), ...known("Enemies blinded per flash", sig.flashEff, f2),
         ...(sig.utilDmg != null ? known("Grenade damage per round (HE + molotov)", sig.utilDmg, (v) => v.toFixed(1)) : known("HE damage per round", sig.heDmg, (v) => v.toFixed(1))),
-        ...known("Teammates blinded per flash (low = good)", sig.flashTeam, f2), ...known("Utility unused at death (low = good)", sig.utilDeath, (v) => `$${Math.round(v)}`), ...known("Grenades thrown per round", sig.util, f2)],
+        ...known("Teammates blinded per flash (low = good)", sig.flashTeam, f2)],
       lurker: hasTrade ? [...known("Times right behind a teammate who dies, per round (low = away from team)", sig.tradeOpp, f2), ...known("Deaths with a teammate close enough to trade (low = alone)", sig.tradedPerDeath, (v) => pct(100 * v))]
         : [why("Needs Leetify trade data", "to see who plays away from the team")],
       rifler: hasTrade ? [...known("Times right behind a teammate who dies, per round", sig.tradeOpp, f2), ...known("Swings for the trade", sig.tradeAtt, pct), ...known("Kills that trade a teammate", sig.tradeShare, (v) => pct(100 * v))]
@@ -700,12 +693,15 @@ const Analysis = (() => {
       for (const k of [...keys].sort((a, b) => (points[b] - floor[b]) - (points[a] - floor[a]))) { if (left <= 0) break; floor[k]++; left--; }
       Object.assign(points, floor);
     }
-    const ranked = Object.keys(scores).map((k) => ({ id: k, ...info(k), score: scores[k], points: scores[k] == null ? null : points[k], why: reasons[k] }))
+    // a split needs most roles judged: with fewer than 3 (e.g. no Leetify data) one role would take all the points,
+    // so then each role shows its fit instead and only a high fit names a role
+    const judged = Object.values(scores).filter((v) => v != null).length, split = judged >= 3;
+    const ranked = Object.keys(scores).map((k) => ({ id: k, ...info(k), score: scores[k], points: scores[k] == null || !split ? null : points[k], why: reasons[k] }))
       .sort((a, b) => (isAwper ? (b.id === "awper") - (a.id === "awper") : 0) || (b.points ?? -1) - (a.points ?? -1) || (b.score ?? -1) - (a.score ?? -1));
     const [top, second] = ranked;
-    const flexible = !isAwper && !(top.points >= 35 && top.points - (second?.points ?? 0) >= 10);
+    const flexible = !isAwper && !(split ? top.points >= 35 && top.points - (second?.points ?? 0) >= 10 : top.score >= ROLE_MIN);
     const gap = second?.points != null ? top.points - second.points : null;
-    const confidence = isAwper ? (sniperShare >= 0.3 ? "clear" : "leaning") : flexible ? "low" : top.points >= 50 ? "clear" : "leaning";
+    const confidence = isAwper ? (sniperShare >= 0.3 ? "clear" : "leaning") : flexible ? "low" : split && top.points >= 50 ? "clear" : "leaning";
 
     // traits that sit on top of the role
     const lr = d.leetify?.rating || {}, traits = [];
