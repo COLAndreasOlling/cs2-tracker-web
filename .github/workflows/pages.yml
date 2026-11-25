@@ -53,7 +53,7 @@ jobs:
       - name: Stamp asset version
         run: sed -i "s/__BUILD__/${GITHUB_SHA::8}/g" static/index.html
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: static
       - id: deployment
